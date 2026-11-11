@@ -1,0 +1,20 @@
+name: Template
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  template:
+    uses: neanderhq/neander_backend/.github/workflows/template-contract.yml@a4835cf2d2ce09b9462610107bdd022efd1b36c8
+    with:
+      node_version: "22.23.2"
+      test_database_profile: postgres
+      gcp_workload_identity_provider: ${{ vars.TEMPLATE_GCP_WIF_PROVIDER }}
+      gcp_service_account: ${{ vars.TEMPLATE_GCP_SERVICE_ACCOUNT }}
+      image_repository: ${{ vars.TEMPLATE_IMAGE_REPOSITORY }}
+      artifact_bucket: ${{ vars.TEMPLATE_ARTIFACT_BUCKET }}
+      assets_base_url: ${{ vars.TEMPLATE_ASSETS_BASE_URL }}
+      assets_bucket: ${{ vars.TEMPLATE_ASSETS_BUCKET }}

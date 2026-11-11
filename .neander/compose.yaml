@@ -28,8 +28,9 @@ x-neander:
     - service: app
       name: OWNER_PASSWORD
       required: true
-      source: user
+      source: generated
       provider: null
+      generator: opaque-random
     - service: app
       name: SESSION_SECRET
       required: true

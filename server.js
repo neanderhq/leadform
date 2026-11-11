@@ -1,61 +1,29 @@
 import express from 'express';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
-import Database from 'better-sqlite3';
 import { Pool } from 'pg';
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { initializeSchema } from './db/schema.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pgPool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
-let sqliteDb;
+for (const name of ['DATABASE_URL', 'OWNER_PASSWORD', 'SESSION_SECRET']) {
+  if (!process.env[name]) throw new Error(`${name} is required`);
+}
+const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
 const postgresSql = sql => {
   let parameterIndex = 0;
   return sql.replace(/\?/g, () => `$${++parameterIndex}`);
 };
 const db = {
-  async get(sql, values = []) {
-    if (pgPool) return (await pgPool.query(postgresSql(sql), values)).rows[0];
-    return sqliteDb.prepare(sql).get(...values);
-  },
-  async all(sql, values = []) {
-    if (pgPool) return (await pgPool.query(postgresSql(sql), values)).rows;
-    return sqliteDb.prepare(sql).all(...values);
-  },
-  async run(sql, values = []) {
-    if (pgPool) return { changes: (await pgPool.query(postgresSql(sql), values)).rowCount };
-    return sqliteDb.prepare(sql).run(...values);
-  }
+  async get(sql, values = []) { return (await pgPool.query(postgresSql(sql), values)).rows[0]; },
+  async all(sql, values = []) { return (await pgPool.query(postgresSql(sql), values)).rows; },
+  async run(sql, values = []) { return { changes: (await pgPool.query(postgresSql(sql), values)).rowCount }; }
 };
-const initializeDatabase = async () => {
-  if (pgPool) {
-    await pgPool.query("CREATE TABLE IF NOT EXISTS forms (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', questions TEXT NOT NULL DEFAULT '[]', design TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
-    await pgPool.query('CREATE TABLE IF NOT EXISTS responses (id TEXT PRIMARY KEY, form_id TEXT NOT NULL REFERENCES forms(id) ON DELETE CASCADE, answers TEXT NOT NULL, submitted_at TEXT NOT NULL)');
-    await pgPool.query('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-    await pgPool.query('CREATE TABLE IF NOT EXISTS leadform_sessions (sid varchar PRIMARY KEY, sess json NOT NULL, expire timestamp(6) NOT NULL)');
-    await pgPool.query('CREATE INDEX IF NOT EXISTS leadform_sessions_expire_idx ON leadform_sessions (expire)');
-    return;
-  }
-  const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
-  const databasePath = process.env.DATABASE_PATH || path.join(dataDir, 'leadform.sqlite');
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  sqliteDb = new Database(databasePath);
-  sqliteDb.pragma('journal_mode = WAL');
-  sqliteDb.pragma('foreign_keys = ON');
-  sqliteDb.exec(`CREATE TABLE IF NOT EXISTS forms (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', questions TEXT NOT NULL DEFAULT '[]', design TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS responses (id TEXT PRIMARY KEY, form_id TEXT NOT NULL REFERENCES forms(id) ON DELETE CASCADE, answers TEXT NOT NULL, submitted_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-`);
-};
-await initializeDatabase();
-const sessionSecret = process.env.SESSION_SECRET || await (async () => {
-  const generated = crypto.randomBytes(48).toString('hex');
-  await db.run('INSERT INTO app_settings (key,value) VALUES (?,?) ON CONFLICT (key) DO NOTHING', ['session_secret', generated]);
-  return (await db.get('SELECT value FROM app_settings WHERE key=?', ['session_secret'])).value;
-})();
-const sessionStore = pgPool ? new (connectPgSimple(session))({ pool: pgPool, tableName: 'leadform_sessions', createTableIfMissing: false }) : undefined;
+await initializeSchema(pgPool);
+const sessionSecret = process.env.SESSION_SECRET;
+const sessionStore = new (connectPgSimple(session))({ pool: pgPool, tableName: 'leadform_sessions', createTableIfMissing: false });
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '1mb' }));
@@ -79,7 +47,7 @@ const parseForm = (row) => ({ ...row, ...(row.response_count === undefined ? {} 
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const expectedUser = 'admin';
-  const expectedPassword = process.env.OWNER_PASSWORD || 'leadform123';
+  const expectedPassword = process.env.OWNER_PASSWORD;
   if (username !== expectedUser || password !== expectedPassword) return res.status(401).json({ error: 'Incorrect username or password' });
   req.session.regenerate(error => {
     if (error) return res.status(500).json({ error: 'Unable to create owner session' });
@@ -91,7 +59,7 @@ app.post('/api/logout', ownerOnly, (req, res) => req.session.destroy(() => {
   res.clearCookie('leadform.sid', { httpOnly: true, sameSite: 'lax', secure: req.secure });
   res.json({ ok: true });
 }));
-app.get('/api/session', (req, res) => res.json({ owner: Boolean(req.session.owner), showDefaults: process.env.NODE_ENV === 'development' && !process.env.OWNER_PASSWORD }));
+app.get('/api/session', (req, res) => res.json({ owner: Boolean(req.session.owner), showDefaults: false }));
 
 app.get('/api/forms', ownerOnly, asyncRoute(async (_req, res) => {
   const rows = await db.all(`SELECT f.*, (SELECT COUNT(*) FROM responses r WHERE r.form_id=f.id) AS response_count FROM forms f ORDER BY f.created_at DESC`);

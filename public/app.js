@@ -48,11 +48,11 @@ async function route() {
   if (pathname.startsWith('/responses/')) return responsesView(decodeURIComponent(pathname.slice(11)));
   if (pathname.startsWith('/edit/')) return editorView(decodeURIComponent(pathname.slice(6)));
   const state=await api('/api/session');
-  if (!state.owner) return loginView(state.showDefaults);
+  if (!state.owner) return loginView();
   return dashboardView();
 }
-async function loginView(showDefaults) {
-  app.innerHTML=`<main class="login-wrap"><form class="login-card" id="login-form"><div class="wordmark">Leadform</div><h1>Welcome back</h1><p>Sign in to manage your forms and responses.</p><div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required value="${showDefaults?'admin':''}"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required value="${showDefaults?'leadform123':''}"></div><div id="login-error" class="error" role="alert"></div><button class="button primary" type="submit">Sign in</button>${showDefaults?'<p class="hint">Development login: admin / leadform123</p>':''}</form></main>`;
+async function loginView() {
+  app.innerHTML=`<main class="login-wrap"><form class="login-card" id="login-form"><div class="wordmark">Leadform</div><h1>Welcome back</h1><p>Sign in to manage your forms and responses.</p><div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required value="admin"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div><div id="login-error" class="error" role="alert"></div><button class="button primary" type="submit">Sign in</button></form></main>`;
   document.querySelector('#login-form').addEventListener('submit',async event=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));try{await api('/api/login',{method:'POST',body:json(data)});go('/')}catch(error){document.querySelector('#login-error').textContent=error.message;}});
 }
 async function dashboardView() {

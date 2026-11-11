@@ -4,15 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "NODE_ENV=development node --watch server.js",
-    "build": "node --check server.js && node --check public/app.js"
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "NODE_ENV=development node --env-file-if-exists=.env --watch server.js",
+    "build": "node --check server.js && node --check public/app.js",
+    "check": "npm run build && node --check db/schema.mjs && node --check .neander/seed.mjs && node --check scripts/verify-template.mjs",
+    "test": "node --test scripts/template.test.mjs",
+    "db:seed": "node --env-file-if-exists=.env .neander/seed.mjs",
+    "test:template": "node scripts/verify-template.mjs"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
     "connect-pg-simple": "^10.0.0",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
     "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
   }
 }
