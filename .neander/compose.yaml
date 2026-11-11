@@ -1,0 +1,41 @@
+name: leadform
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .neander/Dockerfile
+    ports:
+      - "8080:8080"
+    secrets:
+      - source: neander_environment
+        target: neander_environment
+    x-google-cloudrun:
+      ingress-container: true
+secrets:
+  neander_environment:
+    file: /run/neander/secrets/neander_environment
+x-neander:
+  ingress:
+    service: app
+    port: 8080
+    root_probe: /
+  environment:
+    - service: app
+      name: DATABASE_URL
+      required: true
+      source: provisioned
+      provider: Neon
+    - service: app
+      name: OWNER_PASSWORD
+      required: true
+      source: user
+      provider: null
+    - service: app
+      name: SESSION_SECRET
+      required: true
+      source: generated
+      provider: null
+      generator: opaque-random
+  probes:
+    - path: /
+      success_status_range: 2xx
