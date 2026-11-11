@@ -1,0 +1,16 @@
+contract_version: 1
+id: leadform
+title: Form Builder
+description: Build branded forms with conditional questions, collect responses and export them to CSV.
+category: Business & Productivity
+best_for: Teams collecting enquiries, feedback and registrations
+features: [Form editor, Conditional questions, Public forms, Response collection, CSV export]
+included: [Form builder application, PostgreSQL schema, Fictional forms and responses]
+thumbnail: .neander/thumbnail.png
+commands:
+  install: [npm, ci]
+  check: [npm, run, check]
+  test: [npm, test]
+  verify: [npm, run, test:template]
+seed:
+  command: [npm, run, db:seed]

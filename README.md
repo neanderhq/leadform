@@ -1,16 +1,30 @@
 # Leadform
 
-A neutral, single-owner form builder with public forms, branching, and CSV exports.
+A single-owner form builder with public forms, branching, response collection and
+CSV exports. This private template starts from production Neander project
+`proj_c26d64ac166c`; [onboarding and provenance](docs/template-onboarding.md)
+describes the source snapshot and release contract.
 
-## Run locally
+Use Node 22.23.2 from `mise.toml`, then run `npm ci`. Copy `.env.example` to `.env`
+and configure a local PostgreSQL `DATABASE_URL`, a unique `OWNER_PASSWORD` and a
+random `SESSION_SECRET`. Start with `npm run dev`, or `npm start` for the normal
+server. Open `http://localhost:3000` and sign in as `admin` with your configured
+password. There is no shared default password. Generate local secrets with
+`node -e 'console.log(require("node:crypto").randomBytes(32).toString("base64url"))'`.
 
-```sh
-npm ci
-npm run dev
-```
+`npm run db:seed` creates three fictional forms and five example responses once.
+Retries preserve user changes, including deleted forms. Source contains no
+customer responses, credentials or database contents.
 
-Open `http://localhost:3000`. Sign in as `admin` / `leadform123`; the default is displayed on the sign-in page only in development. `npm start` runs the production-style server and listens on the platform's `PORT` (or port `3000` locally). `npm run build` checks the JavaScript syntax; this app has no separate asset-compilation step.
+PostgreSQL stores forms, responses and owner sessions. Startup and seeding use
+`db/schema.mjs` with the versioned `db/schema/001-initial.sql`, preserving the
+application's existing startup-initialization behavior. Sessions survive server
+restarts when the same database and session secret are supplied. Startup never
+seeds customer data automatically. `npm run check` checks source syntax and
+`npm test` runs local tests.
 
-Set `OWNER_PASSWORD` to replace the default owner password. If `DATABASE_URL` is set to a PostgreSQL connection string, the app creates its forms, responses, settings, and session tables in that database at startup. Owner sessions are stored in PostgreSQL so they work across server restarts and instances. Without `DATABASE_URL`, the app uses SQLite at `data/leadform.sqlite`; `DATA_DIR` or `DATABASE_PATH` can override that location, and sessions use Express's default in-memory store. If `SESSION_SECRET` is not provided, a random secret is generated once and stored in the selected database so it is reused after a restart. Switching from SQLite to PostgreSQL does not copy existing forms or responses; migrate data separately if needed. The login page displays the default only when `NODE_ENV=development`; `npm run dev` sets this automatically. The default password is not displayed in production, but it remains the default unless `OWNER_PASSWORD` is configured. Because this password is weak, do not expose a production deployment publicly unless the Publish environment can set a replacement password.
-
-Forms and completed submissions are stored server-side, not in browser storage. For deployments that provide PostgreSQL, set `DATABASE_URL` to use durable database storage rather than relying on the container's local SQLite file. This workspace contains no Neander Publish storage configuration or evidence about how to provision or attach a database, so configure the connection string through the platform and confirm its retention behavior there.
+Normal Publish uses `.neander/compose.yaml`. It requests managed PostgreSQL and
+generated owner/session secrets. The entrypoint reads the mounted runtime secret
+bundle literally; credentials are not baked into the image. The shared template
+workflow verifies this same image and publishes artifacts on main. Consuming a
+release to create/deploy a user's project remains a separate product integration.
