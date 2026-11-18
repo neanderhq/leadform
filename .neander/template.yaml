@@ -2,7 +2,7 @@ contract_version: 1
 id: leadform
 title: Form Builder
 description: Build branded forms with conditional questions, collect responses and export them to CSV.
-category: Business & Productivity
+category: Forms & Surveys
 best_for: Teams collecting enquiries, feedback and registrations
 features: [Form editor, Conditional questions, Public forms, Response collection, CSV export]
 included: [Form builder application, PostgreSQL schema, Fictional forms and responses]
