@@ -28,3 +28,16 @@ generated owner/session secrets. The entrypoint reads the mounted runtime secret
 bundle literally; credentials are not baked into the image. The shared template
 workflow verifies this same image and publishes artifacts on main. Consuming a
 release to create/deploy a user's project remains a separate product integration.
+
+## License
+
+[MIT](LICENSE). Third-party components retain their respective licenses and
+existing attribution notices.
+
+## Public CI and Neander releases
+
+Public CI installs locked dependencies, checks types/syntax, runs app tests and
+builds the application. It requires no Neander publishing credentials or private
+tools. Neander's private release workflow separately verifies the committed
+application image with a disposable database, then publishes it to the template
+catalog. Existing projects continue through normal editing and Publish.
