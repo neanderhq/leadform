@@ -1,6 +1,6 @@
 contract_version: 1
 id: leadform
-title: Form Builder
+title: Leadform
 description: Build branded forms with conditional questions, collect responses and export them to CSV.
 category: Forms & Surveys
 best_for: Teams collecting enquiries, feedback and registrations
