@@ -1,5 +1,12 @@
 # Form Builder template
 
+Current release process: this MIT-licensed application runs app checks and builds
+in its own CI. Neander maintainers manually verify and publish template releases
+from private CI; contributors need no private workflow or publishing credentials.
+The workflow pins and publication runs below describe the original onboarding.
+See the repository README for current local setup and contributor instructions.
+
+
 ## Provenance and scope
 
 The initial GitHub commit `5685a6f305df8ad6da91119389fc6795008e707c` is a byte-for-byte
