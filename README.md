@@ -2,7 +2,9 @@
 
 A single-owner form builder for enquiries, feedback and registrations.
 
-**Neander library:** Form Builder · **Category:** Forms & Surveys
+**Product inspiration:** Form-building workflows: conditional questions, public forms and response collection.
+
+**Neander library:** Leadform · **Category:** Forms & Surveys
 
 ![Leadform with fictional sample data](.neander/thumbnail.png)
 
@@ -15,7 +17,7 @@ A single-owner form builder for enquiries, feedback and registrations.
 
 ## How this fits into Neander
 
-This is the open-source app behind Neander’s **Form Builder** starter. You can
+This is the open-source app behind Neander’s **Leadform** starter. You can
 run and modify it on its own without a Neander account, or use it as a starting
 point in Neander.
 
@@ -41,8 +43,8 @@ PostgreSQL service.
 ### 1. Install the app
 
 ```sh
-git clone https://github.com/neanderhq/leadform-template.git
-cd leadform-template
+git clone https://github.com/neanderhq/leadform.git
+cd leadform
 npm ci
 cp .env.example .env
 ```
