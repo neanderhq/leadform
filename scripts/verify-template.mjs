@@ -24,9 +24,9 @@ const directory = await mkdtemp(join(tmpdir(), 'leadform-template-'));
 const bundle = join(directory, 'neander_environment');
 const runtimeDatabase = new URL(databaseUrl);
 if (process.platform === 'darwin' && ['localhost', '127.0.0.1'].includes(runtimeDatabase.hostname)) runtimeDatabase.hostname = 'host.docker.internal';
-const environment = { DATABASE_URL: runtimeDatabase.href, OWNER_PASSWORD: process.env.OWNER_PASSWORD, SESSION_SECRET: process.env.SESSION_SECRET };
+const environment = { DATABASE_URL: runtimeDatabase.href, OWNER_PASSWORD: process.env.OWNER_PASSWORD, SESSION_SECRET: process.env.SESSION_SECRET, APP_ORIGIN: origin.origin };
 assert.ok(environment.OWNER_PASSWORD && environment.SESSION_SECRET);
-await writeFile(bundle, Object.entries(environment).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', { mode: 0o600 });
+await writeFile(bundle, Object.entries(environment).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', { mode: 0o644 });
 const db = new Client({ connectionString: databaseUrl });
 let browser;
 let connected = false;
@@ -51,14 +51,14 @@ try {
   assert.deepEqual(await seed(databaseUrl), { created: false });
   await exec('npx', ['playwright', 'install', ...(process.platform === 'linux' ? ['--with-deps'] : []), 'chromium'], { timeout: 180000, maxBuffer: 8 * 1024 * 1024 });
   browser = await chromium.launch();
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC', extraHTTPHeaders: { origin: origin.origin } });
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   page.setDefaultTimeout(15000);
   const anonymous = await browser.newContext();
   assert.equal((await anonymous.request.get(`${origin.origin}/api/forms`)).status(), 401);
-  assert.equal((await anonymous.request.post(`${origin.origin}/api/login`, { data: { username: 'admin', password: 'leadform123' } })).status(), 401);
+  assert.equal((await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: origin.origin }, data: { username: 'admin', password: 'leadform123' } })).status(), 401);
   await page.goto(origin.origin);
   await page.getByLabel('Username').fill('admin');
   await page.getByLabel('Password').fill(environment.OWNER_PASSWORD);
@@ -68,6 +68,7 @@ try {
   await expect(page.getByRole('heading', { name: 'Project enquiry', exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   if (process.env.NEANDER_TEMPLATE_SCREENSHOT) await page.screenshot({ path: process.env.NEANDER_TEMPLATE_SCREENSHOT, fullPage: true, animations: 'disabled' });
+  await json(await context.request.post(`${origin.origin}/api/forms`, { headers: { origin: 'https://attacker.example' }, data: {} }), 403);
   const fixture = await json(await context.request.get(`${origin.origin}/api/forms/sample-project-enquiry`));
   await page.goto(`${origin.origin}/edit/${fixture.id}`);
   await expect(page.getByLabel('Form title')).toHaveValue('Project enquiry');
@@ -114,6 +115,30 @@ try {
   assert.equal((await json(await context.request.get(`${origin.origin}/api/session`))).owner, true, 'Owner session must survive restart');
   assert.equal((await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}`))).title, 'Project enquiry — edited');
   assert.equal((await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}/responses`))).responses.length, 3);
+  // Persisted editor content must remain inert in both owner and public views.
+  const hostileId = 'q"/><img src=x onerror="window.__xss=1">';
+  const hostileForm = await json(await context.request.post(`${origin.origin}/api/forms`, { data: { title: '<img src=x onerror="window.__xss=1">' } }), 201);
+  const hostileQuestions = [{ id: hostileId, type: 'short', title: '<svg onload="window.__xss=1">', required: false }];
+  await json(await context.request.put(`${origin.origin}/api/forms/${hostileForm.id}`, { data: { ...hostileForm, questions: hostileQuestions } }));
+  await page.goto(`${origin.origin}/edit/${hostileForm.id}`);
+  await expect(page.locator('[data-question]')).toHaveCount(1);
+  assert.equal(await page.locator('[data-question]').getAttribute('data-question'), hostileId);
+  await respondent.goto(`${origin.origin}/f/${hostileForm.id}`);
+  await expect(respondent.getByRole('heading', { name: hostileQuestions[0].title, exact: true })).toBeVisible();
+  for (const view of [page, respondent]) {
+    assert.equal(await view.evaluate(() => window.__xss), undefined);
+    assert.equal(await view.locator('img[onerror],svg[onload]').count(), 0);
+  }
+  await json(await context.request.delete(`${origin.origin}/api/forms/${hostileForm.id}`));
+  // Failed password attempts are bounded; a different Origin never reaches login.
+  assert.equal((await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: 'https://attacker.example' }, data: {} })).status(), 403);
+  let limited = false;
+  for (let attempt = 0; attempt < 11; attempt++) {
+    const response = await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: origin.origin }, data: { username: 'admin', password: 'incorrect-fixture-password' } });
+    if (response.status() === 429) { limited = true; break; }
+    assert.equal(response.status(), 401);
+  }
+  assert.equal(limited, true, 'Password guessing must be rate limited');
   assert.deepEqual(pageErrors, []);
   await json(await context.request.post(`${origin.origin}/api/logout`));
   assert.equal((await context.request.get(`${origin.origin}/api/forms`)).status(), 401);
