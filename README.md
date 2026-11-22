@@ -154,3 +154,9 @@ A maintainer decides when to publish a new version to Neander’s library.
 
 [MIT](LICENSE). Third-party components retain their respective licenses and
 existing attribution notices.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting and the automated security checks.
+
+Set `APP_ORIGIN` to the app’s public origin (for local development, `http://127.0.0.1:8080`). Owner mutations require this Origin.

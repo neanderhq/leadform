@@ -4,7 +4,7 @@ Leadform is a single-owner form builder. The Express server is in `server.js`,
 and the browser app is in `public/`.
 
 - Use Node 22.23.2 from `mise.toml`; install locked dependencies with `npm ci`.
-- Configure `DATABASE_URL`, `OWNER_PASSWORD` and `SESSION_SECRET` before starting
+- Configure `DATABASE_URL`, `APP_ORIGIN`, `OWNER_PASSWORD` and `SESSION_SECRET` before starting
   `npm run dev` or `npm start`. There is no shared default password.
 - PostgreSQL holds forms, responses and owner sessions. `db/schema.mjs` applies
   the versioned SQL schema at startup; template seeding uses the same initializer.

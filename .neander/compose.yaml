@@ -26,6 +26,12 @@ x-neander:
       source: provisioned
       provider: Neon
     - service: app
+      name: APP_ORIGIN
+      required: true
+      source: provisioned
+      provider: Neander
+      binding: public_origin
+    - service: app
       name: OWNER_PASSWORD
       required: true
       source: generated

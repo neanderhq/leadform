@@ -1,6 +1,8 @@
 import express from 'express';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
+import { rateLimit } from 'express-rate-limit';
+import { validEmail } from './public/validation.js';
 import { Pool } from 'pg';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,9 +10,10 @@ import crypto from 'node:crypto';
 import { initializeSchema } from './db/schema.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-for (const name of ['DATABASE_URL', 'OWNER_PASSWORD', 'SESSION_SECRET']) {
+for (const name of ['DATABASE_URL', 'OWNER_PASSWORD', 'SESSION_SECRET', 'APP_ORIGIN']) {
   if (!process.env[name]) throw new Error(`${name} is required`);
 }
+const appOrigin = new URL(process.env.APP_ORIGIN).origin;
 const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
 const postgresSql = sql => {
   let parameterIndex = 0;
@@ -26,6 +29,7 @@ const sessionSecret = process.env.SESSION_SECRET;
 const sessionStore = new (connectPgSimple(session))({ pool: pgPool, tableName: 'leadform_sessions', createTableIfMissing: false });
 const app = express();
 app.set('trust proxy', 1);
+app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', (_req, res, next) => {
   res.set('Cache-Control', 'no-store');
@@ -39,16 +43,27 @@ app.use(session({
   ...(sessionStore ? { store: sessionStore } : {}),
   cookie: { httpOnly: true, sameSite: 'lax', secure: 'auto', maxAge: 7 * 24 * 60 * 60 * 1000 }
 }));
-const ownerOnly = (req, res, next) => req.session.owner ? next() : res.status(401).json({ error: 'Owner login required' });
+const protectMutation = (req, res, next) => {
+  if (req.get('origin') !== appOrigin || !req.session.csrfToken || req.get('x-csrf-token') !== req.session.csrfToken) {
+    return res.status(403).json({ error: 'Request origin or CSRF token rejected' });
+  }
+  next();
+};
+const ownerOnly = (req, res, next) => {
+  if (!req.session.owner) return res.status(401).json({ error: 'Owner login required' });
+  return ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? next() : protectMutation(req, res, next);
+};
+const loginLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, skipSuccessfulRequests: true, standardHeaders: 'draft-8', legacyHeaders: false });
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const now = () => new Date().toISOString();
 const parseForm = (row) => ({ ...row, ...(row.response_count === undefined ? {} : { response_count: Number(row.response_count) }), questions: JSON.parse(row.questions), design: JSON.parse(row.design) });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', protectMutation, loginLimit, (req, res) => {
   const { username, password } = req.body || {};
   const expectedUser = 'admin';
-  const expectedPassword = process.env.OWNER_PASSWORD;
-  if (username !== expectedUser || password !== expectedPassword) return res.status(401).json({ error: 'Incorrect username or password' });
+  const expectedPassword = Buffer.from(process.env.OWNER_PASSWORD);
+  const suppliedPassword = typeof password === 'string' ? Buffer.from(password) : Buffer.alloc(0);
+  if (username !== expectedUser || suppliedPassword.length !== expectedPassword.length || !crypto.timingSafeEqual(suppliedPassword, expectedPassword)) return res.status(401).json({ error: 'Incorrect username or password' });
   req.session.regenerate(error => {
     if (error) return res.status(500).json({ error: 'Unable to create owner session' });
     req.session.owner = true;
@@ -59,7 +74,10 @@ app.post('/api/logout', ownerOnly, (req, res) => req.session.destroy(() => {
   res.clearCookie('leadform.sid', { httpOnly: true, sameSite: 'lax', secure: req.secure });
   res.json({ ok: true });
 }));
-app.get('/api/session', (req, res) => res.json({ owner: Boolean(req.session.owner), showDefaults: false }));
+app.get('/api/session', (req, res) => {
+  req.session.csrfToken ||= crypto.randomBytes(32).toString('hex');
+  res.json({ owner: Boolean(req.session.owner), showDefaults: false, csrfToken: req.session.csrfToken });
+});
 
 app.get('/api/forms', ownerOnly, asyncRoute(async (_req, res) => {
   const rows = await db.all(`SELECT f.*, (SELECT COUNT(*) FROM responses r WHERE r.form_id=f.id) AS response_count FROM forms f ORDER BY f.created_at DESC`);
@@ -176,7 +194,7 @@ const validate = (question, answer) => {
   if (question.required && empty) return 'This question is required';
   if (empty) return null;
   if (!['string', 'number'].includes(typeof answer)) return 'Invalid answer';
-  if (question.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(answer))) return 'Please enter a valid email address';
+  if (question.type === 'email' && !validEmail(String(answer))) return 'Please enter a valid email address';
   if (question.type === 'number' && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(String(answer).trim())) return 'Please enter a valid number';
   if (question.type === 'multiple' && !(question.options || []).includes(answer)) return 'Please choose an available option';
   if (question.type === 'yesno' && !['Yes', 'No'].includes(answer)) return 'Please choose Yes or No';
@@ -207,6 +225,7 @@ app.post('/api/public/forms/:id/submit', asyncRoute(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.get('/vendor/purify.min.js', (_req, res) => res.sendFile(path.join(__dirname, 'node_modules/dompurify/dist/purify.min.js')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 const port = Number(process.env.PORT) || 3000;
