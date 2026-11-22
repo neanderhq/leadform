@@ -115,7 +115,11 @@ function renderEditor() {
     empty.hidden=false;
     image.onload=()=>{image.hidden=false;empty.hidden=true;};
     image.onerror=()=>{image.hidden=true;empty.hidden=false;};
-    const url=document.querySelector('#logo-url').value;
+    let url;
+    try {
+      const candidate = new URL(document.querySelector('#logo-url').value);
+      if (candidate.protocol === 'https:' || candidate.protocol === 'http:') url = candidate.href;
+    } catch { /* An unfinished or invalid URL has no preview. */ }
     if(url)image.src=url;else image.removeAttribute('src');
   };
   const renderQuestions=()=>{document.querySelector('#questions').innerHTML=DOMPurify.sanitize(currentForm.questions.map((q,i)=>questionTemplate(q,i,currentForm.questions)).join(''));attachQuestionEvents();};
