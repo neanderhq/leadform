@@ -10,7 +10,10 @@
     "check": "npm run build && node --check db/schema.mjs && node --check .neander/seed.mjs && node --check scripts/verify-template.mjs",
     "test": "node --test scripts/template.test.mjs",
     "db:seed": "node --env-file-if-exists=.env .neander/seed.mjs",
-    "test:template": "node scripts/verify-template.mjs"
+    "test:template": "node scripts/verify-template.mjs",
+    "test:policy": "python3 scripts/check_repository.py",
+    "verify": "npm run check && npm run test && npm run test:policy && npm run build",
+    "test:production": "node scripts/verify-template.mjs"
   },
   "dependencies": {
     "connect-pg-simple": "^10.0.0",
