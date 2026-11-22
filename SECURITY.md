@@ -20,3 +20,8 @@ scans cannot prove that an application has no vulnerabilities.
 Use fictional sample data and unique generated deployment secrets. Never commit
 real workspace data, credentials, `.env` files or provider tokens. Configure
 external integrations in your own deployment and keep their permissions scoped.
+
+Owner writes require both the configured Origin and a session-bound CSRF token.
+API clients can retrieve their token from `/api/session` and send it as
+`X-CSRF-Token`; the browser client handles this automatically. Public respondent
+submissions remain anonymous.

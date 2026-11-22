@@ -43,17 +43,22 @@ app.use(session({
   ...(sessionStore ? { store: sessionStore } : {}),
   cookie: { httpOnly: true, sameSite: 'lax', secure: 'auto', maxAge: 7 * 24 * 60 * 60 * 1000 }
 }));
-const sameOrigin = (req, res, next) => req.get('origin') === appOrigin ? next() : res.status(403).json({ error: 'Request origin rejected' });
+const protectMutation = (req, res, next) => {
+  if (req.get('origin') !== appOrigin || !req.session.csrfToken || req.get('x-csrf-token') !== req.session.csrfToken) {
+    return res.status(403).json({ error: 'Request origin or CSRF token rejected' });
+  }
+  next();
+};
 const ownerOnly = (req, res, next) => {
   if (!req.session.owner) return res.status(401).json({ error: 'Owner login required' });
-  return ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? next() : sameOrigin(req, res, next);
+  return ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? next() : protectMutation(req, res, next);
 };
 const loginLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, skipSuccessfulRequests: true, standardHeaders: 'draft-8', legacyHeaders: false });
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const now = () => new Date().toISOString();
 const parseForm = (row) => ({ ...row, ...(row.response_count === undefined ? {} : { response_count: Number(row.response_count) }), questions: JSON.parse(row.questions), design: JSON.parse(row.design) });
 
-app.post('/api/login', sameOrigin, loginLimit, (req, res) => {
+app.post('/api/login', protectMutation, loginLimit, (req, res) => {
   const { username, password } = req.body || {};
   const expectedUser = 'admin';
   const expectedPassword = Buffer.from(process.env.OWNER_PASSWORD);
@@ -69,7 +74,10 @@ app.post('/api/logout', ownerOnly, (req, res) => req.session.destroy(() => {
   res.clearCookie('leadform.sid', { httpOnly: true, sameSite: 'lax', secure: req.secure });
   res.json({ ok: true });
 }));
-app.get('/api/session', (req, res) => res.json({ owner: Boolean(req.session.owner), showDefaults: false }));
+app.get('/api/session', (req, res) => {
+  req.session.csrfToken ||= crypto.randomBytes(32).toString('hex');
+  res.json({ owner: Boolean(req.session.owner), showDefaults: false, csrfToken: req.session.csrfToken });
+});
 
 app.get('/api/forms', ownerOnly, asyncRoute(async (_req, res) => {
   const rows = await db.all(`SELECT f.*, (SELECT COUNT(*) FROM responses r WHERE r.form_id=f.id) AS response_count FROM forms f ORDER BY f.created_at DESC`);

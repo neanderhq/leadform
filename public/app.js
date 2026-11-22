@@ -8,7 +8,10 @@ let editorDirty = false;
 let currentRoute = location.pathname;
 const esc = (value='') => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const api = async (url, options={}) => {
-  const response = await fetch(url, { ...options, headers:{ ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers||{}) } });
+  // Fetch the current session token for owner writes, including after login rotates the session.
+  const ownerWrite = options.method && !['GET', 'HEAD'].includes(options.method) && !url.startsWith('/api/public/');
+  const csrf = ownerWrite ? await (await fetch('/api/session')).json() : null;
+  const response = await fetch(url, { ...options, headers:{ ...(csrf ? {'X-CSRF-Token':csrf.csrfToken} : {}), ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers||{}) } });
   let body = {};
   try { body = await response.json(); } catch {}
   if (!response.ok) throw Object.assign(new Error(body.error || `Request failed (${response.status})`), { status:response.status, body });

@@ -57,8 +57,14 @@ try {
   page.on('pageerror', error => pageErrors.push(error.message));
   page.setDefaultTimeout(15000);
   const anonymous = await browser.newContext();
+  const ownerRequest = async (method, path, options = {}) => {
+    const state = await json(await context.request.get(`${origin.origin}/api/session`));
+    return context.request[method](`${origin.origin}${path}`, { ...options, headers: { 'x-csrf-token': state.csrfToken, ...options.headers } });
+  };
+  const anonymousState = await json(await anonymous.request.get(`${origin.origin}/api/session`));
+
   assert.equal((await anonymous.request.get(`${origin.origin}/api/forms`)).status(), 401);
-  assert.equal((await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: origin.origin }, data: { username: 'admin', password: 'leadform123' } })).status(), 401);
+  assert.equal((await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: origin.origin, 'x-csrf-token': anonymousState.csrfToken }, data: { username: 'admin', password: 'leadform123' } })).status(), 401);
   await page.goto(origin.origin);
   await page.getByLabel('Username').fill('admin');
   await page.getByLabel('Password').fill(environment.OWNER_PASSWORD);
@@ -68,8 +74,10 @@ try {
   await expect(page.getByRole('heading', { name: 'Project enquiry', exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   if (process.env.NEANDER_TEMPLATE_SCREENSHOT) await page.screenshot({ path: process.env.NEANDER_TEMPLATE_SCREENSHOT, fullPage: true, animations: 'disabled' });
-  await json(await context.request.post(`${origin.origin}/api/forms`, { headers: { origin: 'https://attacker.example' }, data: {} }), 403);
-  await json(await context.request.post(`${origin.origin}/api/forms`, { headers: { origin: '' }, data: {} }), 403);
+  await json(await ownerRequest('post', `/api/forms`, { headers: { origin: 'https://attacker.example' }, data: {} }), 403);
+  await json(await ownerRequest('post', `/api/forms`, { headers: { origin: '' }, data: {} }), 403);
+  await json(await context.request.post(`${origin.origin}/api/forms`, { data: {} }), 403);
+  await json(await context.request.post(`${origin.origin}/api/forms`, { headers: { 'x-csrf-token': 'wrong-fixture-token' }, data: {} }), 403);
   const fixture = await json(await context.request.get(`${origin.origin}/api/forms/sample-project-enquiry`));
   await page.goto(`${origin.origin}/edit/${fixture.id}`);
   await expect(page.getByLabel('Form title')).toHaveValue('Project enquiry');
@@ -107,7 +115,7 @@ try {
 
   const deletedForm = (await db.query('SELECT * FROM forms WHERE id=$1', ['sample-event-registration'])).rows[0];
   const deletedResponses = (await db.query('SELECT * FROM responses WHERE form_id=$1', [deletedForm.id])).rows;
-  await json(await context.request.delete(`${origin.origin}/api/forms/${deletedForm.id}`));
+  await json(await ownerRequest('delete', `/api/forms/${deletedForm.id}`));
   assert.deepEqual(await Promise.all([seed(databaseUrl), seed(databaseUrl)]), [{ created: false }, { created: false }]);
   assert.equal((await context.request.get(`${origin.origin}/api/forms/${deletedForm.id}`)).status(), 404);
   assert.equal((await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}`))).title, 'Project enquiry — edited');
@@ -118,9 +126,9 @@ try {
   assert.equal((await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}/responses`))).responses.length, 3);
   // Persisted editor content must remain inert in both owner and public views.
   const hostileId = 'q"/><img src=x onerror="window.__xss=1">';
-  const hostileForm = await json(await context.request.post(`${origin.origin}/api/forms`, { data: { title: '<img src=x onerror="window.__xss=1">' } }), 201);
+  const hostileForm = await json(await ownerRequest('post', `/api/forms`, { data: { title: '<img src=x onerror="window.__xss=1">' } }), 201);
   const hostileQuestions = [{ id: hostileId, type: 'short', title: '<svg onload="window.__xss=1">', required: false }];
-  await json(await context.request.put(`${origin.origin}/api/forms/${hostileForm.id}`, { data: { ...hostileForm, questions: hostileQuestions } }));
+  await json(await ownerRequest('put', `/api/forms/${hostileForm.id}`, { data: { ...hostileForm, questions: hostileQuestions } }));
   await page.goto(`${origin.origin}/edit/${hostileForm.id}`);
   await expect(page.locator('[data-question]')).toHaveCount(1);
   assert.equal(await page.locator('[data-question]').getAttribute('data-question'), hostileId);
@@ -130,18 +138,18 @@ try {
     assert.equal(await view.evaluate(() => window.__xss), undefined);
     assert.equal(await view.locator('img[onerror],svg[onload]').count(), 0);
   }
-  await json(await context.request.delete(`${origin.origin}/api/forms/${hostileForm.id}`));
+  await json(await ownerRequest('delete', `/api/forms/${hostileForm.id}`));
   // Failed password attempts are bounded; a different Origin never reaches login.
   assert.equal((await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: 'https://attacker.example' }, data: {} })).status(), 403);
   let limited = false;
   for (let attempt = 0; attempt < 11; attempt++) {
-    const response = await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: origin.origin }, data: { username: 'admin', password: 'incorrect-fixture-password' } });
+    const response = await anonymous.request.post(`${origin.origin}/api/login`, { headers: { origin: origin.origin, 'x-csrf-token': anonymousState.csrfToken }, data: { username: 'admin', password: 'incorrect-fixture-password' } });
     if (response.status() === 429) { limited = true; break; }
     assert.equal(response.status(), 401);
   }
   assert.equal(limited, true, 'Password guessing must be rate limited');
   assert.deepEqual(pageErrors, []);
-  await json(await context.request.post(`${origin.origin}/api/logout`));
+  await json(await ownerRequest('post', `/api/logout`));
   assert.equal((await context.request.get(`${origin.origin}/api/forms`)).status(), 401);
 
   // Restore only this verification's mutations to allow a repeated run on its fixture.
