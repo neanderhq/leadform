@@ -81,6 +81,10 @@ try {
   const fixture = await json(await context.request.get(`${origin.origin}/api/forms/sample-project-enquiry`));
   await page.goto(`${origin.origin}/edit/${fixture.id}`);
   await expect(page.getByLabel('Form title')).toHaveValue('Project enquiry');
+  await page.getByLabel('Logo image URL').fill('javascript:window.__xss=1');
+  assert.equal(await page.locator('#logo-preview').getAttribute('src'), null);
+  await page.getByLabel('Logo image URL').fill(fixture.design.logo);
+
   await page.getByLabel('Form title').fill('Project enquiry — edited');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#save-state')).toHaveText('Saved');
