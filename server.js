@@ -56,8 +56,9 @@ const parseForm = (row) => ({ ...row, ...(row.response_count === undefined ? {} 
 app.post('/api/login', sameOrigin, loginLimit, (req, res) => {
   const { username, password } = req.body || {};
   const expectedUser = 'admin';
-  const expectedPassword = process.env.OWNER_PASSWORD;
-  if (username !== expectedUser || typeof password !== 'string' || !crypto.timingSafeEqual(crypto.createHash('sha256').update(password).digest(), crypto.createHash('sha256').update(expectedPassword).digest())) return res.status(401).json({ error: 'Incorrect username or password' });
+  const expectedPassword = Buffer.from(process.env.OWNER_PASSWORD);
+  const suppliedPassword = typeof password === 'string' ? Buffer.from(password) : Buffer.alloc(0);
+  if (username !== expectedUser || suppliedPassword.length !== expectedPassword.length || !crypto.timingSafeEqual(suppliedPassword, expectedPassword)) return res.status(401).json({ error: 'Incorrect username or password' });
   req.session.regenerate(error => {
     if (error) return res.status(500).json({ error: 'Unable to create owner session' });
     req.session.owner = true;

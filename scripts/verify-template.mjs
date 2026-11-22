@@ -69,6 +69,7 @@ try {
   await page.evaluate(() => document.fonts.ready);
   if (process.env.NEANDER_TEMPLATE_SCREENSHOT) await page.screenshot({ path: process.env.NEANDER_TEMPLATE_SCREENSHOT, fullPage: true, animations: 'disabled' });
   await json(await context.request.post(`${origin.origin}/api/forms`, { headers: { origin: 'https://attacker.example' }, data: {} }), 403);
+  await json(await context.request.post(`${origin.origin}/api/forms`, { headers: { origin: '' }, data: {} }), 403);
   const fixture = await json(await context.request.get(`${origin.origin}/api/forms/sample-project-enquiry`));
   await page.goto(`${origin.origin}/edit/${fixture.id}`);
   await expect(page.getByLabel('Form title')).toHaveValue('Project enquiry');
