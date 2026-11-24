@@ -3,7 +3,6 @@ const app = document.querySelector('#app');
 const questionTypes = [['short','Short text'],['email','Email'],['number','Number'],['multiple','Multiple choice'],['yesno','Yes / No'],['rating','Rating (1–5)']];
 const defaults = { primary:'#5366d8', background:'#f7f7f5', text:'#202124', logo:'' };
 let currentForm = null;
-let saveTimer;
 let editorDirty = false;
 let currentRoute = location.pathname;
 const esc = (value='') => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -104,10 +103,22 @@ function editorSnapshot() {
 function renderEditor() {
   const form=currentForm;form.design={...defaults,...form.design};form.questions ||= [];
   editorDirty=false;
-  app.innerHTML=DOMPurify.sanitize(`<main class="shell editor-shell"><header class="editor-head"><div><button class="button ghost" data-nav="/">← Dashboard</button><div class="editor-title">Edit form</div></div><div class="top-actions"><button class="button" id="preview">Preview</button><button class="button" id="copy-link">Copy link</button><div class="save-control"><button class="button primary" id="save">Save</button><div id="save-state" class="save-state" role="status"></div></div></div></header><div class="editor-layout"><section><div class="panel"><div class="field"><label for="form-title">Form title</label><input id="form-title" class="control" value="${esc(form.title)}" maxlength="200"></div><div class="field"><label for="form-description">Description</label><textarea id="form-description" class="control">${esc(form.description)}</textarea></div></div><div class="panel" style="margin-top:16px"><p class="section-label">Questions</p><div id="questions">${form.questions.map((q,i)=>questionTemplate(q,i,form.questions)).join('')}</div><button class="button" id="add-question">＋ Add question</button></div></section><aside class="panel side-panel"><p class="section-label">Design</p><div class="color-row"><label for="primary-color">Primary color</label><input type="color" id="primary-color" value="${esc(form.design.primary)}"></div><div class="color-row"><label for="background-color">Background</label><input type="color" id="background-color" value="${esc(form.design.background)}"></div><div class="color-row"><label for="text-color">Text color</label><input type="color" id="text-color" value="${esc(form.design.text)}"></div><div class="field" style="margin-top:18px"><label for="logo-url">Logo image URL</label><input id="logo-url" class="control" type="url" placeholder="https://…" value="${esc(form.design.logo)}"><div class="logo-preview-wrap"><img id="logo-preview" alt="Logo preview"><span id="logo-preview-empty">Logo preview appears here</span></div></div><p class="hint">Changes appear in preview and on your public form after you save.</p></aside></div></main>`);
+  app.innerHTML=DOMPurify.sanitize(`<main class="shell editor-shell"><header class="editor-head"><div><button class="button ghost" data-nav="/">← Dashboard</button><h1 class="editor-title">Edit form</h1></div><div class="top-actions"><button class="button" id="preview">Preview</button><button class="button" id="copy-link">Copy link</button><div class="save-control"><button class="button primary" id="save">Save</button><div id="save-state" class="save-state" role="status"></div></div></div></header><p class="editor-sharing-note">Preview includes unsaved edits. The public link shows the saved form.</p><div class="editor-layout"><section><div class="panel"><div class="field"><label for="form-title">Form title</label><input id="form-title" class="control" value="${esc(form.title)}" maxlength="200"></div><div class="field"><label for="form-description">Description</label><textarea id="form-description" class="control">${esc(form.description)}</textarea></div></div><div class="panel" style="margin-top:16px"><p class="section-label">Questions</p><div id="questions">${form.questions.map((q,i)=>questionTemplate(q,i,form.questions)).join('')}</div><button class="button" id="add-question">＋ Add question</button></div></section><aside class="panel side-panel"><p class="section-label">Design</p><div class="color-row"><label for="primary-color">Primary color</label><input type="color" id="primary-color" value="${esc(form.design.primary)}"></div><div class="color-row"><label for="background-color">Background</label><input type="color" id="background-color" value="${esc(form.design.background)}"></div><div class="color-row"><label for="text-color">Text color</label><input type="color" id="text-color" value="${esc(form.design.text)}"></div><div class="field" style="margin-top:18px"><label for="logo-url">Logo image URL</label><input id="logo-url" class="control" type="url" placeholder="https://…" value="${esc(form.design.logo)}"><div class="logo-preview-wrap"><img id="logo-preview" alt="Logo preview"><span id="logo-preview-empty">Logo preview appears here</span></div></div><p class="hint">Changes appear in preview and on your public form after you save.</p></aside></div></main>`);
   const getSnapshot=()=>editorSnapshot();
-  const saveState=document.querySelector('#save-state');
-  const markUnsaved=()=>{editorDirty=true;saveState.textContent='Unsaved changes';saveState.className='save-state';document.querySelectorAll('[data-question-error]').forEach(error=>error.textContent='');};
+  const saveState = document.querySelector('#save-state');
+  const saveButton = document.querySelector('#save');
+  let editVersion = 0;
+  let saving = false;
+  const setSaveState = (message, state = '') => {
+    saveState.textContent = message;
+    saveState.className = ['save-state', state].filter(Boolean).join(' ');
+  };
+  const markUnsaved = () => {
+    editVersion++;
+    editorDirty = true;
+    setSaveState(saving ? 'Saving earlier edits…' : 'Unsaved changes');
+    document.querySelectorAll('[data-question-error]').forEach(error => error.textContent = '');
+  };
   const updateLogoPreview=()=>{
     const image=document.querySelector('#logo-preview');
     const empty=document.querySelector('#logo-preview-empty');
@@ -122,17 +133,30 @@ function renderEditor() {
     } catch { /* An unfinished or invalid URL has no preview. */ }
     if(url)image.src=url;else image.removeAttribute('src');
   };
-  const renderQuestions=()=>{document.querySelector('#questions').innerHTML=DOMPurify.sanitize(currentForm.questions.map((q,i)=>questionTemplate(q,i,currentForm.questions)).join(''));attachQuestionEvents();};
+  const renderQuestions = (id, focusSelectors = []) => {
+    const container = document.querySelector('#questions');
+    container.innerHTML = DOMPurify.sanitize(currentForm.questions.map((q, i) => questionTemplate(q, i, currentForm.questions)).join(''));
+    attachQuestionEvents();
+    const question = id && container.querySelector(`[data-question="${CSS.escape(id)}"]`);
+    if (!question) return;
+    for (const selector of focusSelectors) {
+      const control = question.querySelector(selector);
+      if (control && !control.disabled) {
+        control.focus();
+        break;
+      }
+    }
+  };
   const attachQuestionEvents=()=>{
     document.querySelectorAll('.question-card').forEach(card=>{
-      card.querySelector('[data-type]').onchange=()=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);q.type=card.querySelector('[data-type]').value;if(q.type==='multiple'&&!q.options?.length)q.options=['Option 1','Option 2'];markUnsaved();renderQuestions()};
+      card.querySelector('[data-type]').onchange=()=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);q.type=card.querySelector('[data-type]').value;if(q.type==='multiple'&&!q.options?.length)q.options=['Option 1','Option 2'];markUnsaved();renderQuestions(q.id, ['[data-type]'])};
       card.querySelector('[data-qtitle]').oninput=event=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);q.title=event.target.value;markUnsaved()};
       card.querySelector('[data-required]').onchange=event=>{currentForm.questions.find(item=>item.id===card.dataset.question).required=event.target.checked;markUnsaved()};
       card.querySelectorAll('[data-option]').forEach(input=>input.oninput=event=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);const index=Number(event.target.dataset.option);const previous=q.options[index];const next=event.target.value;if(previous!==next){if(Object.hasOwn(q.rules||{},previous)){q.rules[next]=q.rules[previous];delete q.rules[previous]}const branch=[...card.querySelectorAll('[data-rule]')].find(select=>select.dataset.rule===previous);if(branch){branch.dataset.rule=next;branch.setAttribute('aria-label',`If ${next}, go to`);branch.previousElementSibling.textContent=next}}q.options[index]=next;markUnsaved()});
       card.querySelectorAll('[data-rule]').forEach(select=>select.onchange=event=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);q.rules={...q.rules,[event.target.dataset.rule]:event.target.value};markUnsaved()});
       card.querySelector('[data-default-next]')?.addEventListener('change',event=>{currentForm.questions.find(item=>item.id===card.dataset.question).defaultNext=event.target.value;markUnsaved()});
-      card.querySelector('[data-add-option]')?.addEventListener('click',()=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);q.options.push(`Option ${q.options.length+1}`);markUnsaved();renderQuestions()});
-      card.querySelectorAll('[data-remove-option]').forEach(button=>button.onclick=()=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);const index=Number(button.dataset.removeOption);delete q.rules?.[q.options[index]];q.options.splice(index,1);markUnsaved();renderQuestions()});
+      card.querySelector('[data-add-option]')?.addEventListener('click',()=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);q.options.push(`Option ${q.options.length+1}`);markUnsaved();renderQuestions(q.id, [`[data-option="${q.options.length-1}"]`])});
+      card.querySelectorAll('[data-remove-option]').forEach(button=>button.onclick=()=>{const q=currentForm.questions.find(item=>item.id===card.dataset.question);const index=Number(button.dataset.removeOption);delete q.rules?.[q.options[index]];q.options.splice(index,1);markUnsaved();renderQuestions(q.id, [`[data-option="${Math.min(index,q.options.length-1)}"]`, '[data-add-option]'])});
       card.querySelector('[data-remove]').onclick=()=>{const removedId=card.dataset.question;currentForm.questions=currentForm.questions.filter(item=>item.id!==removedId);for(const item of currentForm.questions){for(const [choice,target] of Object.entries(item.rules||{}))if(target===removedId)delete item.rules[choice];if(item.defaultNext===removedId)item.defaultNext=''}markUnsaved();renderQuestions()};
       card.querySelector('[data-up]').onclick=()=>moveQuestion(card.dataset.question,-1);
       card.querySelector('[data-down]').onclick=()=>moveQuestion(card.dataset.question,1);
@@ -146,21 +170,67 @@ function renderEditor() {
       for(const [choice,target] of Object.entries(question.rules||{}))if(questionIndexes.has(target)&&questionIndexes.get(target)<=questionIndex){delete question.rules[choice];removedRules++;}
       if(question.defaultNext&&questionIndexes.has(question.defaultNext)&&questionIndexes.get(question.defaultNext)<=questionIndex){question.defaultNext='';removedRules++;}
     });
-    markUnsaved();renderQuestions();
+    markUnsaved();
+    const moveControls = step < 0 ? ['[data-up]', '[data-down]'] : ['[data-down]', '[data-up]'];
+    renderQuestions(questionId, [...moveControls, '[data-qtitle]']);
     if(removedRules)showToast('Removed backward branch rules. They now use the default next step.');
   };
   attachQuestionEvents();
-  document.querySelector('#add-question').onclick=()=>{currentForm.questions.push({id:crypto.randomUUID(),title:'',type:'short',required:false,options:[],rules:{},defaultNext:''});markUnsaved();renderQuestions()};
-  document.querySelector('#save').onclick=async()=>{
-    document.querySelectorAll('[data-question-error]').forEach(error=>error.textContent='');
-    try{const saved=await api(`/api/forms/${form.id}`,{method:'PUT',body:json(getSnapshot())});currentForm=saved;editorDirty=false;saveState.textContent='Saved';saveState.className='save-state ok';showToast('Saved')}
-    catch(error){saveState.textContent=error.message;saveState.className='save-state error';const questionIndex=error.body?.questionIndex;if(Number.isInteger(questionIndex)){const card=document.querySelectorAll('.question-card')[questionIndex];const questionError=card?.querySelector('[data-question-error]');if(questionError)questionError.textContent=error.message;card?.scrollIntoView({behavior:'smooth',block:'center'});}}
+  document.querySelector('#add-question').onclick = () => {
+    const question = {id: crypto.randomUUID(), title: '', type: 'short', required: false, options: [], rules: {}, defaultNext: ''};
+    currentForm.questions.push(question);
+    markUnsaved();
+    renderQuestions(question.id, ['[data-qtitle]']);
+  };
+  saveButton.onclick = async () => {
+    if (saving) return;
+    const version = editVersion;
+    const body = json(getSnapshot());
+    saving = true;
+    // Keep focus on Save while the request is pending. The guard also covers keyboard activation.
+    saveButton.setAttribute('aria-disabled', 'true');
+    setSaveState('Saving…');
+    document.querySelectorAll('[data-question-error]').forEach(error => error.textContent = '');
+    try {
+      const saved = await api(`/api/forms/${form.id}`, {method: 'PUT', body});
+      if (!saveState.isConnected) return;
+      if (editVersion === version) {
+        currentForm = saved;
+        editorDirty = false;
+        setSaveState('Saved', 'ok');
+        showToast('Saved');
+      } else {
+        setSaveState('Unsaved changes');
+        showToast('Earlier edits saved');
+      }
+    } catch (error) {
+      if (!saveState.isConnected) return;
+      setSaveState(error.message, 'error');
+      const questionIndex = error.body?.questionIndex;
+      if (editVersion === version && Number.isInteger(questionIndex)) {
+        const card = document.querySelectorAll('.question-card')[questionIndex];
+        const questionError = card?.querySelector('[data-question-error]');
+        if (questionError) questionError.textContent = error.message;
+        card?.querySelector('[data-qtitle]')?.focus();
+      }
+    } finally {
+      saving = false;
+      saveButton.removeAttribute('aria-disabled');
+    }
   };
   document.querySelectorAll('#form-title,#form-description,#primary-color,#background-color,#text-color').forEach(input=>input.addEventListener('input',markUnsaved));
   document.querySelector('#logo-url').addEventListener('input',()=>{markUnsaved();updateLogoPreview()});
   updateLogoPreview();
   document.querySelector('#preview').onclick=()=>{const draft=getSnapshot();sessionStorage.setItem('leadform-preview',json(draft));window.open(`/preview/${draft.id}`,'_blank')};
-  document.querySelector('#copy-link').onclick=async()=>{await navigator.clipboard.writeText(`${location.origin}/f/${form.id}`);showToast('Public link copied')};
+  document.querySelector('#copy-link').onclick = async () => {
+    const link = `${location.origin}/f/${form.id}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Public link copied');
+    } catch {
+      window.prompt('Copy the public link', link);
+    }
+  };
 }
 
 function calculatePath(form,answers) {
@@ -190,7 +260,12 @@ async function publicView(id,preview) {
   mountRespondent(form,preview);
 }
 function mountRespondent(form,preview) {
-  const questions=form.questions||[];const answers={};let activeId=questions[0]?.id||null;let done=false;let errorMessage='';let selectedChoice=null;
+  const questions = form.questions || [];
+  const answers = Object.create(null);
+  let activeId = questions[0]?.id || null;
+  let done = false;
+  let errorMessage = '';
+  let submitting = false;
   const design={...defaults,...(form.design||{})};
   const color = (value, fallback) => /^#[\da-f]{6}$/i.test(String(value)) ? value : fallback;
   const css=`--primary:${color(design.primary, defaults.primary)};--bg:${color(design.background, defaults.background)};--text:${color(design.text, defaults.text)}`;
@@ -210,37 +285,180 @@ function mountRespondent(form,preview) {
     let target;if(question.type==='multiple'||question.type==='yesno'){const rule=question.rules?.[String(value)];target=rule==='default'?question.defaultNext:rule??question.defaultNext;}
     if(target==='end')return null;if(target)return questions.find(q=>q.id===target)?.id??null;return questions[index+1]?.id??null;
   };
-  const render=()=>{
-    const path=calculatePath(form,answers);const question=questions.find(q=>q.id===activeId);const number=path.indexOf(activeId)+1;const total=Math.max(longestPath,1);const progress=done?100:question?Math.round((Math.max(number,1)/total)*100):0;
-    app.innerHTML=DOMPurify.sanitize(`<main class="public-page" style="${css}"><div class="public-top"><div class="public-progress" role="progressbar" aria-label="Form progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}" style="width:${progress}%"></div></div><div class="public-inner"><div class="public-brand">${design.logo?`<img data-public-logo src="${esc(design.logo)}" alt="${esc(form.title)} logo">`:''}</div>${done?`<section class="public-content thankyou" role="status"><h1>Thank you</h1><p>Your response has been submitted.</p></section>`:!questions.length?`<section class="public-content"><h1>${esc(form.title)}</h1><p class="desc">This form has no questions yet.</p></section>`:`<section class="public-content"><div class="public-count">Question ${number} of ${total}</div>${number===1?`<h1>${esc(form.title)}</h1>${form.description?`<p class="desc">${esc(form.description)}</p>`:''}`:''}<h2 class="question-prompt">${esc(question?.title||'Question')}${question?.required?'<span class="required-mark"> *</span>':''}</h2>${question?.type==='multiple'||question?.type==='yesno'?`<div class="choice-list">${(question.type==='multiple'?question.options||[]:['Yes','No']).map((choice,index)=>`<button type="button" class="choice ${answers[question.id]===choice?'selected':''}" aria-pressed="${answers[question.id]===choice}" data-choice="${esc(choice)}"><span class="choice-key">${index<9?index+1:''}</span>${esc(choice)}</button>`).join('')}</div>`:question?.type==='rating'?`<div class="rating-list">${[1,2,3,4,5].map(value=>`<button type="button" class="choice ${answers[question.id]===String(value)?'selected':''}" aria-pressed="${answers[question.id]===String(value)}" data-choice="${value}">${value}</button>`).join('')}</div>`:`<input class="answer-input" id="answer" type="${question?.type==='email'?'email':'text'}" ${question?.type==='number'?'inputmode="decimal"':''} value="${esc(answers[question?.id]||'')}" aria-label="${esc(question?.title||'Your answer')}" autocomplete="${question?.type==='email'?'email':'off'}" placeholder="Type your answer here…">`}<div class="public-error" role="alert">${esc(errorMessage)}</div></section>`}<footer class="public-bottom">${!done&&questions.length?`<span class="muted mobile-hidden">${preview?'Preview mode':''}</span><div class="public-controls"><button type="button" class="back-button" id="back" ${number<=1?'disabled':''}>Back</button><button type="button" class="ok-button" id="next">${nextFor(question,answers[question?.id],questions.indexOf(question))===null?'Submit':'OK'} <span aria-hidden="true">↵</span></button></div>`:`<span></span>`}</footer></div></main>`);
-    document.querySelector('[data-public-logo]')?.addEventListener('error',event=>{event.currentTarget.hidden=true;},{once:true});
-    const answerInput=document.querySelector('#answer');if(answerInput){answerInput.focus();answerInput.addEventListener('input',()=>{answers[question.id]=answerInput.value;errorMessage=''});answerInput.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();advance()}})}
-    document.querySelectorAll('[data-choice]').forEach(button=>button.onclick=()=>{selectedChoice=button.dataset.choice;answers[question.id]=selectedChoice;errorMessage='';const currentPath=calculatePath(form,answers);const reachable=new Set(currentPath);for(const key of Object.keys(answers))if(!reachable.has(key))delete answers[key];render();document.querySelector(`[data-choice="${CSS.escape(selectedChoice)}"]`)?.focus()});
-    document.querySelector('#back')?.addEventListener('click',back);
-    document.querySelector('#next')?.addEventListener('click',advance);
+  const choicesFor = question => {
+    if (question.type === 'multiple') return question.options || [];
+    if (question.type === 'yesno') return ['Yes', 'No'];
+    if (question.type === 'rating') return ['1', '2', '3', '4', '5'];
+    return null;
   };
-  const back=()=>{const path=calculatePath(form,answers);const index=path.indexOf(activeId);if(index>0){activeId=path[index-1];errorMessage='';render()}};
-  const advance=async()=>{
-    const path=calculatePath(form,answers);const question=questions.find(q=>q.id===activeId);if(!question)return;
-    const input=document.querySelector('#answer');if(input)answers[question.id]=input.value;
-    if(['multiple','yesno','rating'].includes(question.type)&&!(question.id in answers))answers[question.id]='';
-    const validation=validateAnswer(question,answers[question.id]);if(validation){errorMessage=validation;render();document.querySelector('#answer')?.focus();return}
-    if((question.type==='multiple'||question.type==='yesno'||question.type==='rating')&&question.required&&!answers[question.id]){errorMessage='This question is required';render();return}
-    const destination=nextFor(question,answers[question.id],questions.indexOf(question));
-    const reachable=new Set(calculatePath(form,answers));for(const key of Object.keys(answers))if(!reachable.has(key))delete answers[key];
-    if(destination){activeId=destination;errorMessage='';render();return}
-    if(preview){done=true;render();return}
-    try{await api(`/api/public/forms/${encodeURIComponent(form.id)}/submit`,{method:'POST',body:json({answers})});done=true;render()}
-    catch(error){errorMessage=error.message;render()}
+  const variableLength = questions.some(question =>
+    [question.defaultNext, ...Object.values(question.rules || {})].some(target => target && target !== 'default')
+  );
+  const selectChoice = (question, value) => {
+    if (submitting) return;
+    answers[question.id] = value;
+    errorMessage = '';
+    discardSkippedAnswers();
+    render(value);
   };
-  document.addEventListener('keydown',event=>{
-    if(!app.querySelector('.public-page')||done||event.target.matches('input,textarea,select'))return;
-    const question=questions.find(q=>q.id===activeId);if(!question)return;
-    if(event.key==='Enter'){event.preventDefault();advance();return}if(event.key==='ArrowLeft'){back();return}
-    const options=question.type==='multiple'?question.options||[]:question.type==='yesno'?['Yes','No']:question.type==='rating'?['1','2','3','4','5']:[];
-    let optionIndex=-1;if(/^[1-9]$/.test(event.key))optionIndex=Number(event.key)-1;else if(/^[a-z]$/i.test(event.key))optionIndex=event.key.toLowerCase().charCodeAt(0)-97;
-    if(optionIndex>=0&&optionIndex<options.length){answers[question.id]=String(options[optionIndex]);errorMessage='';const path=calculatePath(form,answers);const reachable=new Set(path);for(const key of Object.keys(answers))if(!reachable.has(key))delete answers[key];render()}
-  });
+  const discardSkippedAnswers = () => {
+    const reachable = new Set(calculatePath(form, answers));
+    for (const key of Object.keys(answers)) if (!reachable.has(key)) delete answers[key];
+  };
+  const answerControl = (question, options) => {
+    const error = errorMessage ? 'aria-invalid="true" aria-describedby="answer-error"' : '';
+    if (options) {
+      const layout = question.type === 'rating' ? 'rating-list' : 'choice-list';
+      const buttons = options.map((choice, index) => {
+        const selected = answers[question.id] === choice;
+        const shortcut = question.type !== 'rating' && index < 9
+          ? `<span class="choice-key" aria-hidden="true">${index + 1}</span>` : '';
+        return `<button type="button" class="choice${selected ? ' selected' : ''}" aria-pressed="${selected}" data-choice="${esc(choice)}" ${error} ${submitting ? 'disabled' : ''}>${shortcut}<span>${esc(choice)}</span></button>`;
+      }).join('');
+      return `<div class="${layout}" role="group" aria-labelledby="question-title">${buttons}</div>`;
+    }
+    const type = question.type === 'email' ? 'email' : 'text';
+    return `<input class="answer-input" id="answer" type="${type}"
+      ${question.type === 'number' ? 'inputmode="decimal"' : ''}
+      value="${esc(answers[question.id] || '')}" aria-label="${esc(question.title || 'Your answer')}"
+      ${question.required ? 'required' : ''} ${error} ${submitting ? 'readonly' : ''}
+      autocomplete="${type === 'email' ? 'email' : 'off'}" placeholder="Type your answer here…">`;
+  };
+  const render = preferredChoice => {
+    const path = calculatePath(form, answers);
+    const question = questions.find(q => q.id === activeId);
+    const number = path.indexOf(activeId) + 1;
+    const total = Math.max(longestPath, 1);
+    const progress = done ? 100 : question ? Math.round((Math.max(number, 1) / total) * 100) : 0;
+    const options = question ? choicesFor(question) : null;
+    let content;
+    if (done) {
+      content = `<div class="thankyou"><h1 tabindex="-1">${preview ? 'Preview complete' : 'Thank you'}</h1>
+        <p>${preview ? 'No response was recorded. Return to the editor to keep working.' : 'Your response has been submitted.'}</p></div>`;
+    } else if (!question) {
+      content = `<h1>${esc(form.title)}</h1><p class="desc">This form has no questions yet.</p>`;
+    } else {
+      const last = nextFor(question, answers[activeId], questions.indexOf(question)) === null;
+      const action = submitting ? 'Submitting…' : last ? 'Submit' : 'Next';
+      content = `<div class="public-count">Question ${number}${variableLength ? '' : ` of ${total}`}</div>
+        ${number === 1 ? `<h1>${esc(form.title)}</h1>${form.description ? `<p class="desc">${esc(form.description)}</p>` : ''}` : ''}
+        <h2 class="question-prompt" id="question-title" tabindex="-1">${esc(question.title || 'Question')}${question.required ? '<span class="required-mark" aria-hidden="true"> *</span>' : ''}</h2>
+        ${answerControl(question, options)}
+        <div class="public-error" id="answer-error" role="alert">${esc(errorMessage)}</div>
+        <div class="public-controls">
+          <button type="button" class="back-button" id="back" ${number <= 1 || submitting ? 'disabled' : ''}>Back</button>
+          <button type="button" class="ok-button" id="next" ${submitting ? 'disabled' : ''}>${action}</button>
+        </div>`;
+    }
+    app.innerHTML = DOMPurify.sanitize(`<main class="public-page" style="${css}">
+      <div class="public-top"><div class="public-progress" role="progressbar" aria-label="Form progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}" style="width:${progress}%"></div></div>
+      <div class="public-inner">
+        ${preview ? '<p class="preview-label">Preview mode</p>' : ''}
+        ${design.logo ? `<div class="public-brand"><img data-public-logo src="${esc(design.logo)}" alt="${esc(form.title)} logo"></div>` : ''}
+        <section class="public-content">${content}</section>
+      </div></main>`);
+    app.querySelector('[data-public-logo]')?.addEventListener('error', event => {
+      event.currentTarget.closest('.public-brand').hidden = true;
+    }, {once: true});
+    if (done) {
+      app.querySelector('.thankyou h1').focus();
+      return;
+    }
+    if (!question) return;
+    const answer = app.querySelector('#answer');
+    const buttons = [...app.querySelectorAll('[data-choice]')];
+    if (submitting) {
+      app.querySelector('#question-title').focus();
+      app.querySelector('#next').setAttribute('aria-live', 'polite');
+    } else {
+      const selected = preferredChoice ?? answers[question.id];
+      const focus = answer || buttons.find(button => button.dataset.choice === selected)
+        || buttons[0] || app.querySelector('#question-title');
+      focus.focus();
+    }
+    answer?.addEventListener('input', () => {
+      answers[question.id] = answer.value;
+      errorMessage = '';
+      answer.removeAttribute('aria-invalid');
+      answer.removeAttribute('aria-describedby');
+      app.querySelector('#answer-error').textContent = '';
+    });
+    answer?.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault();
+        advance();
+      }
+    });
+    for (const button of buttons) {
+      button.addEventListener('click', () => selectChoice(question, button.dataset.choice));
+    }
+    app.querySelector('#back').addEventListener('click', back);
+    app.querySelector('#next').addEventListener('click', advance);
+    app.querySelector('.public-page').addEventListener('keydown', event => {
+      if (submitting || event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey
+        || event.metaKey || event.target.matches('input,textarea,select')) return;
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        back();
+      } else if (options) {
+        let index = -1;
+        if (/^[1-9]$/.test(event.key)) index = Number(event.key) - 1;
+        else if (/^[a-z]$/i.test(event.key)) index = event.key.toLowerCase().charCodeAt(0) - 97;
+        const choice = options[index];
+        if (choice !== undefined) {
+          event.preventDefault();
+          selectChoice(question, choice);
+        }
+      }
+    });
+  };
+  const back = () => {
+    if (submitting) return;
+    const path = calculatePath(form, answers);
+    const index = path.indexOf(activeId);
+    if (index > 0) {
+      activeId = path[index - 1];
+      errorMessage = '';
+      render();
+    }
+  };
+  const advance = async () => {
+    if (submitting || done) return;
+    const question = questions.find(q => q.id === activeId);
+    if (!question) return;
+    const input = app.querySelector('#answer');
+    if (input) answers[activeId] = input.value;
+    else if (!Object.hasOwn(answers, activeId)) answers[activeId] = '';
+    errorMessage = validateAnswer(question, answers[activeId]);
+    if (errorMessage) {
+      render();
+      return;
+    }
+    const destination = nextFor(question, answers[activeId], questions.indexOf(question));
+    discardSkippedAnswers();
+    if (destination) {
+      activeId = destination;
+      render();
+      return;
+    }
+    if (preview) {
+      done = true;
+      render();
+      return;
+    }
+    submitting = true;
+    render();
+    const submittingView = app.firstElementChild;
+    try {
+      await api(`/api/public/forms/${encodeURIComponent(form.id)}/submit`, {method: 'POST', body: json({answers})});
+      done = true;
+    } catch (error) {
+      errorMessage = error.message;
+    } finally {
+      submitting = false;
+      if (app.firstElementChild === submittingView) render();
+    }
+  };
   render();
 }
 
@@ -248,8 +466,8 @@ async function responsesView(id) {
   try {
     const [form,data]=await Promise.all([api(`/api/forms/${id}`),api(`/api/forms/${id}/responses`)]);
     const questions=data.questions;const responses=data.responses;
-    app.innerHTML=DOMPurify.sanitize(`<main class="shell">${header(`<button class="button" data-nav="/edit/${form.id}">Edit form</button><button class="button" data-nav="/">Dashboard</button>`)}<section class="responses-head"><div><p class="eyebrow">Responses</p><h1 class="page-title">${esc(form.title)}</h1><p class="intro muted">${responses.length} completed ${responses.length===1?'response':'responses'}</p></div><button class="button primary" id="export" ${responses.length?'':'disabled'}>Export CSV</button></section>${responses.length?`<div class="responses-table-wrap"><table class="responses-table"><thead><tr><th>Submitted</th>${questions.map(q=>`<th>${esc(q.title)}</th>`).join('')}</tr></thead><tbody>${responses.map(response=>`<tr><td data-label="Submitted">${esc(formatDateTime(response.submittedAt))}</td>${questions.map(q=>`<td data-label="${esc(q.title)}">${esc(response.answers[q.id]??'')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`:`<section class="empty"><h2>No responses yet</h2><p>Completed submissions will appear here.</p></section>`}</main>`);
-    document.querySelector('#export').onclick=()=>downloadCsv(form,questions,responses);
+    app.innerHTML=DOMPurify.sanitize(`<main class="shell">${header(`<button class="button" data-nav="/edit/${form.id}">Edit form</button><button class="button" data-nav="/">Dashboard</button>`)}<section class="responses-head"><div><p class="eyebrow">Responses</p><h1 class="page-title">${esc(form.title)}</h1><p class="intro muted">${responses.length} completed ${responses.length===1?'response':'responses'}</p></div>${responses.length ? '<button class="button primary" id="export">Export CSV</button>' : ''}</section>${responses.length?`<div class="responses-table-wrap"><table class="responses-table"><thead><tr><th>Submitted</th>${questions.map(q=>`<th>${esc(q.title)}</th>`).join('')}</tr></thead><tbody>${responses.map(response=>`<tr><td data-label="Submitted">${esc(formatDateTime(response.submittedAt))}</td>${questions.map(q=>`<td data-label="${esc(q.title)}">${esc(response.answers[q.id]??'')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`:`<section class="empty"><h2>No responses yet</h2><p>Completed submissions will appear here.</p></section>`}</main>`);
+    document.querySelector('#export')?.addEventListener('click', () => downloadCsv(form, questions, responses));
   }catch(error){if(error.status===401)return loginView(false);app.innerHTML=DOMPurify.sanitize(`<main class="shell"><p class="error">${esc(error.message)}</p></main>`)}
 }
 function downloadCsv(form,questions,responses) {

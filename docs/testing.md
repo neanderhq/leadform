@@ -18,7 +18,7 @@ The existing JavaScript syntax checks remain the static gate.
 
 ## Production smoke coverage
 
-Owner login, seeded editor, public branching/submission/validation, responses/CSV, seed retries and database/session persistence after restart.
+Owner login, seeded editor, edits during an in-flight save, keyboard focus after adding or moving a question, public branching and validation at 375 CSS pixels, one response from repeated submission activation, responses/CSV, seed retries and database/session persistence after restart.
 
 CI supplies only fictional credentials and an isolated local PostgreSQL service.
 `DATABASE_URL` and `NEANDER_TEMPLATE_TEST_DATABASE_URL` must identify the same

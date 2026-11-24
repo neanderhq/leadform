@@ -56,7 +56,7 @@ try {
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   page.setDefaultTimeout(15000);
-  const anonymous = await browser.newContext();
+  const anonymous = await browser.newContext({viewport: {width: 375, height: 812}});
   const ownerRequest = async (method, path, options = {}) => {
     const state = await json(await context.request.get(`${origin.origin}/api/session`));
     return context.request[method](`${origin.origin}${path}`, { ...options, headers: { 'x-csrf-token': state.csrfToken, ...options.headers } });
@@ -85,9 +85,45 @@ try {
   assert.equal(await page.locator('#logo-preview').getAttribute('src'), null);
   await page.getByLabel('Logo image URL').fill(fixture.design.logo);
 
-  await page.getByLabel('Form title').fill('Project enquiry — edited');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  const titleInput = page.getByLabel('Form title');
+  const saveButton = page.getByRole('button', { name: 'Save', exact: true });
+  const formEndpoint = `**/api/forms/${fixture.id}`;
+  let releaseSave;
+  const allowSave = new Promise(resolve => { releaseSave = resolve; });
+  await page.route(formEndpoint, async route => {
+    if (route.request().method() === 'PUT') await allowSave;
+    await route.continue();
+  });
+  await titleInput.fill('Project enquiry — first save');
+  const firstSave = page.waitForRequest(request =>
+    request.url().endsWith(`/api/forms/${fixture.id}`) && request.method() === 'PUT');
+  await saveButton.click();
+  await firstSave;
+  await expect(saveButton).toBeDisabled();
+  await titleInput.fill('Project enquiry — edited');
+  releaseSave();
+  await expect(page.locator('#save-state')).toHaveText('Unsaved changes');
+  await expect(titleInput).toHaveValue('Project enquiry — edited');
+  await page.unroute(formEndpoint);
+  assert.equal((await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}`))).title, 'Project enquiry — first save');
+  await saveButton.click();
   await expect(page.locator('#save-state')).toHaveText('Saved');
+
+  const temporary = await json(await ownerRequest('post', '/api/forms', {data: {title: 'Keyboard fixture'}}), 201);
+  await page.goto(`${origin.origin}/edit/${temporary.id}`);
+  const addQuestion = page.locator('#add-question');
+  await addQuestion.press('Enter');
+  const firstQuestion = page.getByLabel('Question 1 text');
+  await expect(firstQuestion).toBeFocused();
+  await firstQuestion.fill('First');
+  await addQuestion.press('Enter');
+  const secondQuestion = page.getByLabel('Question 2 text');
+  await expect(secondQuestion).toBeFocused();
+  await secondQuestion.fill('Second');
+  await page.getByRole('button', {name: 'Move question up'}).last().press('Enter');
+  await expect(firstQuestion).toHaveValue('Second');
+  await expect(page.getByRole('button', {name: 'Move question down'}).first()).toBeFocused();
+  await json(await ownerRequest('delete', `/api/forms/${temporary.id}`));
 
   const respondent = await anonymous.newPage();
   respondent.on('pageerror', error => pageErrors.push(error.message));
@@ -96,13 +132,37 @@ try {
   await respondent.locator('#next').click();
   await respondent.getByLabel('Your email address').fill('casey.template@example.invalid');
   await respondent.locator('#next').click();
-  await respondent.getByRole('button', { name: 'Just exploring' }).click();
-  await respondent.locator('#next').click();
-  await expect(respondent.getByLabel('Anything else we should know?')).toBeVisible();
+  await expect(respondent.getByRole('button', { name: 'Website' })).toBeFocused();
+  await respondent.locator('#next').press('Enter');
+  await expect(respondent.getByRole('alert')).toHaveText('This question is required');
+  await expect(respondent.getByRole('button', { name: 'Website' })).toBeFocused();
+  const exploring = respondent.getByRole('button', { name: 'Just exploring' });
+  await exploring.press('Enter');
+  await expect(exploring).toHaveAttribute('aria-pressed', 'true');
+  await respondent.locator('#next').press('Enter');
+  const notes = respondent.getByLabel('Anything else we should know?');
+  await expect(notes).toBeFocused();
   await expect(respondent.getByText('What is your budget?', { exact: true })).toHaveCount(0);
-  await respondent.getByLabel('Anything else we should know?').fill('A fictional browser submission.');
-  await respondent.getByRole('button', { name: 'Submit' }).click();
-  await expect(respondent.getByRole('heading', { name: 'Thank you' })).toBeVisible();
+  await respondent.locator('#back').press('Enter');
+  await expect(exploring).toBeFocused();
+  await respondent.locator('#next').press('Enter');
+  await notes.fill('A fictional browser submission.');
+  const submitEndpoint = `**/api/public/forms/${fixture.id}/submit`;
+  let submitCount = 0;
+  await respondent.route(submitEndpoint, async route => {
+    submitCount++;
+    await delay(250);
+    await route.continue();
+  });
+  await respondent.getByRole('button', { name: 'Submit' }).evaluate(button => {
+    button.click();
+    button.click();
+  });
+  await expect(respondent.getByRole('button', { name: 'Submitting…' })).toBeDisabled();
+  await expect(respondent.getByRole('heading', { name: 'Thank you' })).toBeFocused();
+  await respondent.unroute(submitEndpoint);
+  assert.equal(submitCount, 1, 'Repeated activation should submit once');
+  assert.equal(await respondent.evaluate(() => document.documentElement.scrollWidth), 375);
   await json(await anonymous.request.post(`${origin.origin}/api/public/forms/${fixture.id}/submit`, { data: { answers: { name: 'Invalid', email: 'not-an-email', service: 'Website' } } }), 400);
   const responses = await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}/responses`));
   assert.equal(responses.responses.length, 3);
