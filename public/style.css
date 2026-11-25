@@ -59,3 +59,5 @@
 .alert-toggle input { width: 18px; height: 18px; margin: 0; flex: none; }
 .response-alerts .button { padding: 6px 8px; }
 #alert-error { margin-top: 9px; }
+
+#export:disabled { background: #e7e7e3; color: #595a5b; border-color: #deded9; cursor: not-allowed; }

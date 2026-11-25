@@ -292,7 +292,7 @@ function showEmbedSnippet(id, trigger) {
     <p class="muted">Paste this code into an HTML block on your website. The embed uses the published form.</p>
     <div class="field">
       <label for="embed-code">Embed code</label>
-      <textarea id="embed-code" rows="4" readonly></textarea>
+      <textarea id="embed-code" rows="6" readonly></textarea>
     </div>
     <div class="response-actions">
       <button class="button primary" id="copy-embed-code" type="button">Copy embed code</button>
@@ -322,6 +322,8 @@ function showEmbedSnippet(id, trigger) {
   app.append(dialog);
   dialog.showModal();
   dialog.querySelector('#copy-embed-code').focus();
+  code.setSelectionRange(0, 0);
+  code.scrollTop = 0;
 }
 
 function calculatePath(form,answers) {
