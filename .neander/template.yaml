@@ -1,12 +1,31 @@
 contract_version: 1
 id: leadform
 title: Leadform
-description: Build branded forms with conditional questions, collect responses and export them to CSV.
+description: >-
+  Build branded forms with conditional questions and publish them as a link or an inline website embed.
+  Find responses by answer text or submission date, export the matching rows to CSV, and opt in to private email alerts when delivery is configured.
 category: Forms & Surveys
-best_for: Teams collecting enquiries, feedback and registrations
-features: [Form editor, Conditional questions, Public forms, Response collection, CSV export]
-included: [Form builder application, PostgreSQL schema, Fictional forms and responses]
+best_for: Studios and organizers collecting enquiries, feedback and registrations
+features:
+  - Branded form editor and conditional questions
+  - Private drafts and shareable published forms
+  - Inline website embeds
+  - Response search and date filters
+  - Filtered CSV export
+  - Optional email alerts for new responses
+included:
+  - Single-owner form builder and public respondent pages
+  - Response dashboard and CSV export
+  - Inline embed setup
+  - Configurable Resend delivery for owner alerts
+  - PostgreSQL migrations and fictional forms and responses
 thumbnail: .neander/thumbnail.png
+screenshots:
+  - .neander/screenshots/form-editor.png
+  - .neander/screenshots/embed-setup.png
+  - .neander/screenshots/embedded-form.png
+  - .neander/screenshots/filtered-responses.png
+  - .neander/screenshots/response-alerts.png
 commands:
   install: [npm, ci]
   check: [npm, run, check]
