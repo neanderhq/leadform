@@ -56,7 +56,13 @@ const ownerOnly = (req, res, next) => {
 const loginLimit = rateLimit({ windowMs: 15 * 60_000, limit: 10, skipSuccessfulRequests: true, standardHeaders: 'draft-8', legacyHeaders: false });
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const now = () => new Date().toISOString();
-const parseForm = (row) => ({ ...row, ...(row.response_count === undefined ? {} : { response_count: Number(row.response_count) }), questions: JSON.parse(row.questions), design: JSON.parse(row.design) });
+const parseForm = ({ published_snapshot, ...row }) => ({
+  ...row,
+  ...(row.response_count === undefined ? {} : { response_count: Number(row.response_count) }),
+  questions: JSON.parse(row.questions),
+  design: JSON.parse(row.design),
+  published_version: published_snapshot?.version ?? null
+});
 
 app.post('/api/login', protectMutation, loginLimit, (req, res) => {
   const { username, password } = req.body || {};
@@ -143,30 +149,56 @@ app.get('/api/forms/:id', ownerOnly, asyncRoute(async (req, res) => {
 }));
 app.put('/api/forms/:id', ownerOnly, asyncRoute(async (req, res) => {
   const { title, description, questions, design } = req.body || {};
-  if (!await db.get('SELECT id FROM forms WHERE id=?', [req.params.id])) return res.status(404).json({ error: 'Form not found' });
   const validation = validateQuestions(questions);
   if (!validation.valid) return res.status(400).json({ error: validation.error, ...(validation.questionIndex === undefined ? {} : { questionIndex: validation.questionIndex }) });
   if (!isValidDesign(design)) return res.status(400).json({ error: 'Invalid design configuration' });
   const savedDesign = { ...defaultDesign, ...design };
-  await db.run('UPDATE forms SET title=?,description=?,questions=?,design=?,updated_at=? WHERE id=?', [String(title || 'Untitled form').slice(0, 200), String(description || '').slice(0, 2000), JSON.stringify(questions), JSON.stringify(savedDesign), now(), req.params.id]);
-  res.json(parseForm(await db.get('SELECT * FROM forms WHERE id=?', [req.params.id])));
+  const row = await db.get(
+    'UPDATE forms SET title=?,description=?,questions=?,design=?,updated_at=?,draft_version=draft_version+1 WHERE id=? RETURNING *',
+    [String(title || 'Untitled form').slice(0, 200), String(description || '').slice(0, 2000), JSON.stringify(questions), JSON.stringify(savedDesign), now(), req.params.id]
+  );
+  return row ? res.json(parseForm(row)) : res.status(404).json({ error: 'Form not found' });
+}));
+app.post('/api/forms/:id/publish', ownerOnly, asyncRoute(async (req, res) => {
+  const version = req.body?.version;
+  if (!Number.isSafeInteger(version) || version < 1 || version > 2147483647) {
+    return res.status(400).json({ error: 'A saved draft version is required' });
+  }
+  const row = await db.get(`
+    UPDATE forms SET published_snapshot=jsonb_build_object(
+      'version', draft_version, 'title', title, 'description', description,
+      'questions', questions::jsonb, 'design', design::jsonb
+    )
+    WHERE id=? AND draft_version=? AND jsonb_array_length(questions::jsonb)>0
+    RETURNING *
+  `, [req.params.id, version]);
+  if (row) return res.json(parseForm(row));
+  const current = await db.get('SELECT draft_version FROM forms WHERE id=?', [req.params.id]);
+  if (!current) return res.status(404).json({ error: 'Form not found' });
+  if (current.draft_version !== version) {
+    return res.status(409).json({ error: 'The saved draft changed. Reload it before publishing.' });
+  }
+  return res.status(400).json({ error: 'Add at least one question before publishing' });
 }));
 app.delete('/api/forms/:id', ownerOnly, asyncRoute(async (req, res) => {
   const result = await db.run('DELETE FROM forms WHERE id=?', [req.params.id]);
   result.changes ? res.json({ ok: true }) : res.status(404).json({ error: 'Form not found' });
 }));
 app.get('/api/forms/:id/responses', ownerOnly, asyncRoute(async (req, res) => {
-  const form = await db.get('SELECT id,questions FROM forms WHERE id=?', [req.params.id]);
+  const form = await db.get('SELECT published_snapshot FROM forms WHERE id=?', [req.params.id]);
   if (!form) return res.status(404).json({ error: 'Form not found' });
   const responses = await db.all('SELECT id,answers,submitted_at FROM responses WHERE form_id=? ORDER BY submitted_at DESC', [req.params.id]);
-  res.json({ questions: JSON.parse(form.questions), responses: responses.map(r => ({ id: r.id, answers: JSON.parse(r.answers), submittedAt: r.submitted_at })) });
+  res.json({ questions: form.published_snapshot?.questions ?? [], responses: responses.map(r => ({ id: r.id, answers: JSON.parse(r.answers), submittedAt: r.submitted_at })) });
 }));
 
-const publicForm = id => db.get('SELECT id,title,description,questions,design FROM forms WHERE id=?', [id]);
+const publicForm = async id => {
+  const row = await db.get('SELECT published_snapshot FROM forms WHERE id=?', [id]);
+  return row?.published_snapshot ? { id, ...row.published_snapshot } : null;
+};
 app.get('/api/public/forms/:id', asyncRoute(async (req, res) => {
   const form = await publicForm(req.params.id);
   if (!form) return res.status(404).json({ error: 'Form not found' });
-  res.json({ ...form, questions: JSON.parse(form.questions), design: JSON.parse(form.design) });
+  res.json(form);
 }));
 const nextId = (question, value, allQuestions, index) => {
   let target;
@@ -204,7 +236,11 @@ const validate = (question, answer) => {
 app.post('/api/public/forms/:id/submit', asyncRoute(async (req, res) => {
   const form = await publicForm(req.params.id);
   if (!form) return res.status(404).json({ error: 'Form not found' });
-  const questions = JSON.parse(form.questions);
+  const requestedVersion = req.body?.version;
+  if (requestedVersion !== undefined && requestedVersion !== form.version) {
+    return res.status(409).json({ error: 'This form changed while you were answering. Reload to use the current version.' });
+  }
+  const questions = form.questions;
   if (!questions.length) return res.status(400).json({ error: 'This form has no questions' });
   const incoming = req.body?.answers;
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return res.status(400).json({ error: 'Invalid submission' });
@@ -221,7 +257,13 @@ app.post('/api/public/forms/:id/submit', asyncRoute(async (req, res) => {
   }
   if (path.at(-1) && nextId(questions.find(item => item.id === path.at(-1)), cleaned[path.at(-1)], questions, questions.findIndex(q => q.id === path.at(-1))) !== null) return res.status(400).json({ error: 'Form is not complete' });
   const responseId = crypto.randomUUID();
-  await db.run('INSERT INTO responses (id,form_id,answers,submitted_at) VALUES (?,?,?,?)', [responseId, req.params.id, JSON.stringify(cleaned), now()]);
+  const result = await db.run(`
+    INSERT INTO responses (id,form_id,answers,submitted_at)
+    SELECT ?, id, ?, ? FROM forms WHERE id=? AND published_snapshot->>'version'=?
+  `, [responseId, JSON.stringify(cleaned), now(), req.params.id, String(form.version)]);
+  if (!result.changes) {
+    return res.status(409).json({ error: 'This form changed while you were answering. Reload to use the current version.' });
+  }
   res.json({ ok: true });
 }));
 

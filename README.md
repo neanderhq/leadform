@@ -12,7 +12,7 @@ A single-owner form builder for enquiries, feedback and registrations.
 
 - Create and style forms using several question types.
 - Use conditional branching to guide respondents.
-- Share public forms and preview drafts.
+- Save private drafts, preview changes and publish to a stable public link.
 - Collect responses and export them to CSV.
 
 ## How this fits into Neander
@@ -99,7 +99,7 @@ Sign in as **`admin`** with the `OWNER_PASSWORD` you configured.
 
 ### Try the form flow
 
-Open **Project enquiry**, edit a question, then use its public form link to submit a response. Return to **View responses** to inspect or export the result.
+Open **Project enquiry**, edit a question and choose **Save draft**. The live form keeps its published version until you choose **Publish changes**. Open the public link to submit a response, then return to **View responses** to inspect or export it. A new form becomes public when you first choose **Publish**.
 
 ## Sample data
 

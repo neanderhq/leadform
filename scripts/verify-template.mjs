@@ -56,7 +56,7 @@ try {
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   page.setDefaultTimeout(15000);
-  const anonymous = await browser.newContext();
+  const anonymous = await browser.newContext({viewport: {width: 375, height: 812}});
   const ownerRequest = async (method, path, options = {}) => {
     const state = await json(await context.request.get(`${origin.origin}/api/session`));
     return context.request[method](`${origin.origin}${path}`, { ...options, headers: { 'x-csrf-token': state.csrfToken, ...options.headers } });
@@ -85,24 +85,136 @@ try {
   assert.equal(await page.locator('#logo-preview').getAttribute('src'), null);
   await page.getByLabel('Logo image URL').fill(fixture.design.logo);
 
-  await page.getByLabel('Form title').fill('Project enquiry — edited');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  const titleInput = page.getByLabel('Form title');
+  const saveButton = page.getByRole('button', { name: 'Save draft', exact: true });
+  const formEndpoint = `**/api/forms/${fixture.id}`;
+  let releaseSave;
+  const allowSave = new Promise(resolve => { releaseSave = resolve; });
+  await page.route(formEndpoint, async route => {
+    if (route.request().method() === 'PUT') await allowSave;
+    await route.continue();
+  });
+  await titleInput.fill('Project enquiry — first save');
+  const firstSave = page.waitForRequest(request =>
+    request.url().endsWith(`/api/forms/${fixture.id}`) && request.method() === 'PUT');
+  await saveButton.click();
+  await firstSave;
+  await expect(saveButton).toBeDisabled();
+  await titleInput.fill('Project enquiry — edited');
+  releaseSave();
+  await expect(page.locator('#save-state')).toHaveText('Unsaved changes');
+  await expect(titleInput).toHaveValue('Project enquiry — edited');
+  await page.unroute(formEndpoint);
+  assert.equal((await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}`))).title, 'Project enquiry — first save');
+  await saveButton.click();
   await expect(page.locator('#save-state')).toHaveText('Saved');
 
+  const seededPublic = await json(await anonymous.request.get(`${origin.origin}/api/public/forms/${fixture.id}`));
+  assert.equal(seededPublic.title, fixture.title, 'Draft saves must preserve the seeded public form');
+  const temporary = await json(await ownerRequest('post', '/api/forms', {data: {title: 'Keyboard fixture'}}), 201);
+  const temporaryApi = `${origin.origin}/api/public/forms/${temporary.id}`;
+  const temporaryLink = `${origin.origin}/f/${temporary.id}`;
+  assert.equal((await anonymous.request.get(temporaryApi)).status(), 404);
+  assert.equal((await anonymous.request.post(`${origin.origin}/api/forms/${temporary.id}/publish`, {data: {version: temporary.draft_version}})).status(), 401);
+  await json(await ownerRequest('post', `/api/forms/${temporary.id}/publish`, {data: {version: temporary.draft_version}}), 400);
+  await page.goto(`${origin.origin}/edit/${temporary.id}`);
+  const addQuestion = page.locator('#add-question');
+  await addQuestion.press('Enter');
+  const firstQuestion = page.getByLabel('Question 1 text');
+  await expect(firstQuestion).toBeFocused();
+  await firstQuestion.fill('First');
+  await addQuestion.press('Enter');
+  const secondQuestion = page.getByLabel('Question 2 text');
+  await expect(secondQuestion).toBeFocused();
+  await secondQuestion.fill('Second');
+  await page.getByRole('button', {name: 'Move question up'}).last().press('Enter');
+  await expect(firstQuestion).toHaveValue('Second');
+  await expect(page.getByRole('button', {name: 'Move question down'}).first()).toBeFocused();
+  await expect(page.getByRole('button', {name: 'Publish', exact: true})).toBeDisabled();
+  await expect(page.getByRole('button', {name: 'Copy link'})).toBeDisabled();
+  await saveButton.click();
+  await expect(page.locator('#save-state')).toHaveText('Saved');
+  await page.reload();
+  await expect(firstQuestion).toHaveValue('Second');
+  await expect(page.locator('#publication-state')).toHaveText('Draft only');
+  assert.equal((await anonymous.request.get(temporaryApi)).status(), 404);
+
+  await page.getByRole('button', {name: 'Publish', exact: true}).click();
+  await expect(page.locator('#publication-state')).toHaveText('Published');
+  await expect(page.getByRole('button', {name: 'Copy link'})).toBeEnabled();
+  const firstPublication = await json(await anonymous.request.get(temporaryApi));
   const respondent = await anonymous.newPage();
   respondent.on('pageerror', error => pageErrors.push(error.message));
+  await respondent.goto(temporaryLink);
+  await expect(respondent.getByRole('heading', {name: 'Keyboard fixture', exact: true})).toBeVisible();
+
+  await titleInput.fill('Updated draft');
+  await firstQuestion.fill('Updated question');
+  await saveButton.click();
+  await expect(page.locator('#save-state')).toHaveText('Saved');
+  await page.reload();
+  await expect(titleInput).toHaveValue('Updated draft');
+  await expect(page.locator('#publication-state')).toHaveText('Published · Draft changes');
+  assert.deepEqual(await json(await anonymous.request.get(temporaryApi)), firstPublication);
+  await respondent.getByRole('textbox', {name: 'Second', exact: true}).fill('A live response while the draft is saved');
+  await respondent.locator('#next').click();
+  await respondent.getByRole('button', {name: 'Submit', exact: true}).click();
+  await expect(respondent.getByRole('heading', {name: 'Thank you'})).toBeVisible();
+  const oldResults = await json(await ownerRequest('get', `/api/forms/${temporary.id}/responses`));
+  assert.equal(oldResults.questions[0].title, 'Second');
+  assert.equal(oldResults.responses[0].answers[firstPublication.questions[0].id], 'A live response while the draft is saved');
+  await json(await ownerRequest('post', `/api/forms/${temporary.id}/publish`, {data: {version: firstPublication.version}}), 409);
+
+  await page.getByRole('button', {name: 'Publish changes'}).click();
+  await expect(page.locator('#publication-state')).toHaveText('Published');
+  await respondent.reload();
+  await expect(respondent.getByRole('heading', {name: 'Updated draft', exact: true})).toBeVisible();
+  await expect(respondent.getByRole('textbox', {name: 'Updated question', exact: true})).toBeVisible();
+  assert.equal(respondent.url(), temporaryLink);
+  assert.equal((await anonymous.request.post(temporaryApi + '/submit', {
+    data: {version: firstPublication.version, answers: {}}
+  })).status(), 409, 'Stale respondent versions must be rejected');
+  const newResults = await json(await ownerRequest('get', `/api/forms/${temporary.id}/responses`));
+  assert.equal(newResults.questions[0].title, 'Updated question');
+  assert.deepEqual(newResults.responses, oldResults.responses, 'Publishing preserves stored responses');
+  await json(await ownerRequest('delete', `/api/forms/${temporary.id}`));
+
   await respondent.goto(`${origin.origin}/f/${fixture.id}`);
   await respondent.getByLabel('What is your name?').fill('Casey Template');
   await respondent.locator('#next').click();
   await respondent.getByLabel('Your email address').fill('casey.template@example.invalid');
   await respondent.locator('#next').click();
-  await respondent.getByRole('button', { name: 'Just exploring' }).click();
-  await respondent.locator('#next').click();
-  await expect(respondent.getByLabel('Anything else we should know?')).toBeVisible();
+  await expect(respondent.getByRole('button', { name: 'Website' })).toBeFocused();
+  await respondent.locator('#next').press('Enter');
+  await expect(respondent.getByRole('alert')).toHaveText('This question is required');
+  await expect(respondent.getByRole('button', { name: 'Website' })).toBeFocused();
+  const exploring = respondent.getByRole('button', { name: 'Just exploring' });
+  await exploring.press('Enter');
+  await expect(exploring).toHaveAttribute('aria-pressed', 'true');
+  await respondent.locator('#next').press('Enter');
+  const notes = respondent.getByLabel('Anything else we should know?');
+  await expect(notes).toBeFocused();
   await expect(respondent.getByText('What is your budget?', { exact: true })).toHaveCount(0);
-  await respondent.getByLabel('Anything else we should know?').fill('A fictional browser submission.');
-  await respondent.getByRole('button', { name: 'Submit' }).click();
-  await expect(respondent.getByRole('heading', { name: 'Thank you' })).toBeVisible();
+  await respondent.locator('#back').press('Enter');
+  await expect(exploring).toBeFocused();
+  await respondent.locator('#next').press('Enter');
+  await notes.fill('A fictional browser submission.');
+  const submitEndpoint = `**/api/public/forms/${fixture.id}/submit`;
+  let submitCount = 0;
+  await respondent.route(submitEndpoint, async route => {
+    submitCount++;
+    await delay(250);
+    await route.continue();
+  });
+  await respondent.getByRole('button', { name: 'Submit' }).evaluate(button => {
+    button.click();
+    button.click();
+  });
+  await expect(respondent.getByRole('button', { name: 'Submitting…' })).toBeDisabled();
+  await expect(respondent.getByRole('heading', { name: 'Thank you' })).toBeFocused();
+  await respondent.unroute(submitEndpoint);
+  assert.equal(submitCount, 1, 'Repeated activation should submit once');
+  assert.equal(await respondent.evaluate(() => document.documentElement.scrollWidth), 375);
   await json(await anonymous.request.post(`${origin.origin}/api/public/forms/${fixture.id}/submit`, { data: { answers: { name: 'Invalid', email: 'not-an-email', service: 'Website' } } }), 400);
   const responses = await json(await context.request.get(`${origin.origin}/api/forms/${fixture.id}/responses`));
   assert.equal(responses.responses.length, 3);
@@ -132,7 +244,8 @@ try {
   const hostileId = 'q"/><img src=x onerror="window.__xss=1">';
   const hostileForm = await json(await ownerRequest('post', `/api/forms`, { data: { title: '<img src=x onerror="window.__xss=1">' } }), 201);
   const hostileQuestions = [{ id: hostileId, type: 'short', title: '<svg onload="window.__xss=1">', required: false }];
-  await json(await ownerRequest('put', `/api/forms/${hostileForm.id}`, { data: { ...hostileForm, questions: hostileQuestions } }));
+  const savedFixture = await json(await ownerRequest('put', `/api/forms/${hostileForm.id}`, { data: { ...hostileForm, questions: hostileQuestions } }));
+  await json(await ownerRequest('post', `/api/forms/${hostileForm.id}/publish`, {data: {version: savedFixture.draft_version}}));
   await page.goto(`${origin.origin}/edit/${hostileForm.id}`);
   await expect(page.locator('[data-question]')).toHaveCount(1);
   assert.equal(await page.locator('[data-question]').getAttribute('data-question'), hostileId);
@@ -157,11 +270,11 @@ try {
   assert.equal((await context.request.get(`${origin.origin}/api/forms`)).status(), 401);
 
   // Restore only this verification's mutations to allow a repeated run on its fixture.
-  await db.query('UPDATE forms SET title=$1 WHERE id=$2', [fixture.title, fixture.id]);
+  await db.query('UPDATE forms SET title=$1,updated_at=$2,draft_version=$3 WHERE id=$4', [fixture.title, fixture.updated_at, fixture.draft_version, fixture.id]);
   await db.query('DELETE FROM responses WHERE id=$1', [added.id]);
-  await db.query('INSERT INTO forms (id,title,description,questions,design,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [deletedForm.id, deletedForm.title, deletedForm.description, deletedForm.questions, deletedForm.design, deletedForm.created_at, deletedForm.updated_at]);
+  await db.query('INSERT INTO forms (id,title,description,questions,design,created_at,updated_at,draft_version,published_snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [deletedForm.id, deletedForm.title, deletedForm.description, deletedForm.questions, deletedForm.design, deletedForm.created_at, deletedForm.updated_at, deletedForm.draft_version, deletedForm.published_snapshot]);
   for (const row of deletedResponses) await db.query('INSERT INTO responses (id,form_id,answers,submitted_at) VALUES ($1,$2,$3,$4)', [row.id, row.form_id, row.answers, row.submitted_at]);
-  console.log('Built-image verification passed: mounted runtime secret bundle, owner login, seeded editor, public branching/submission/validation, responses/CSV, concurrent seed retries, preserved edits/deletion, and database/session persistence after restart.');
+  console.log('Built-image verification passed: mounted runtime secret bundle, owner login, seeded editor, private drafts, explicit publication and version checks, public branching/submission/validation, responses/CSV, concurrent seed retries, preserved edits/deletion, and database/session persistence after restart.');
 } catch (error) {
   const logs = await exec('docker', ['logs', '--tail', '80', name]).catch(() => ({ stdout: '', stderr: '' }));
   console.error(logs.stdout, logs.stderr);
