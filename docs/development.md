@@ -50,7 +50,9 @@ The server sends a protected Results link through the Resend HTTPS API.
 Provider acceptance is separate from inbox delivery. Pending jobs use one
 stable idempotency key per response, with up to five attempts in 23 hours.
 The app drains the queue while the process is active and resumes on restart.
-A host that suspends its process can defer a retry until it starts again.
+When the retry window closes after an attempted send without confirmation,
+Results shows an unconfirmed status. A host that suspends its process can
+defer a retry until it starts again.
 On a sender or recipient change, jobs addressed to the prior configuration
 fail visibly instead of being rerouted.
 

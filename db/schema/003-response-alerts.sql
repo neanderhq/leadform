@@ -3,7 +3,7 @@ ALTER TABLE forms ADD COLUMN IF NOT EXISTS alerts_enabled BOOLEAN NOT NULL DEFAU
 CREATE TABLE IF NOT EXISTS response_alerts (
   response_id TEXT PRIMARY KEY REFERENCES responses(id) ON DELETE CASCADE,
   payload JSONB NOT NULL,
-  state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','sending','accepted','failed')),
+  state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','sending','accepted','failed','unconfirmed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   available_at TIMESTAMPTZ NOT NULL DEFAULT now(),

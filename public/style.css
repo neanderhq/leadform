@@ -32,6 +32,9 @@
 .response-actions, .response-results-bar, .response-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .response-results-bar { justify-content: space-between; margin: 14px 0; }
 .response-results-bar p { margin: 0; }
+.response-results-bar > div { min-width: 0; }
+#response-count { font-weight: 600; }
+#active-response-filters { font-size: 13px; overflow-wrap: anywhere; }
 .response-pagination { justify-content: center; margin-top: 18px; }
 .response-pagination[hidden] { display: none; }
 #response-error:focus { outline-offset: 4px; }

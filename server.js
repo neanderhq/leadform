@@ -261,7 +261,8 @@ async function alertSettings(id) {
   const status = await db.get(`
     SELECT count(*) FILTER (WHERE a.state IN ('queued','sending'))::int AS queued,
            count(*) FILTER (WHERE a.state='accepted')::int AS accepted,
-           count(*) FILTER (WHERE a.state='failed')::int AS failed
+           count(*) FILTER (WHERE a.state='failed')::int AS failed,
+           count(*) FILTER (WHERE a.state='unconfirmed')::int AS unconfirmed
     FROM response_alerts a JOIN responses r ON r.id=a.response_id WHERE r.form_id=?
   `, [id]);
   return { enabled: form.alerts_enabled, configured: alerts.configured, ...status };

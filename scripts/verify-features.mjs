@@ -72,6 +72,7 @@ export async function verifyResponseFilters({ db, ownerRequest, anonymous, origi
     await page.getByLabel('To date (UTC)').fill(final);
     await page.getByRole('button', { name: 'Apply filters' }).press('Enter');
     await expect(page.locator('#response-count')).toHaveText('21 matching responses');
+    await expect(page.locator('#active-response-filters')).toContainText('cOpPeR % fInCh');
     await expect(page.locator('#next-response-page')).toBeEnabled();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 375);
     await capture(page, 'filters-phone-results');
@@ -214,7 +215,7 @@ const controlledAlertConfig = {
 export async function verifyUnconfiguredAlerts({ page, ownerRequest, db, origin }) {
   const endpoint = '/api/forms/sample-project-enquiry/alerts';
   const status = await ownerRequest('get', endpoint);
-  assert.deepEqual(await status.json(), { enabled: false, configured: false, queued: 0, accepted: 0, failed: 0 });
+  assert.deepEqual(await status.json(), { enabled: false, configured: false, queued: 0, accepted: 0, failed: 0, unconfirmed: 0 });
   assert.equal((await ownerRequest('put', endpoint, { data: { enabled: true } })).status(), 409);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM response_alerts')).rows[0].count, 0);
   await page.goto(origin + '/responses/sample-project-enquiry');
@@ -284,7 +285,7 @@ export async function verifyResponseAlerts({ page, ownerRequest, anonymous, db, 
   const post = (data, id = form.id) => anonymous.request.post(`${origin}/api/public/forms/${id}/submit`, { data });
 
   try {
-    assert.deepEqual(await get(), { enabled: false, configured: true, queued: 0, accepted: 0, failed: 0 });
+    assert.deepEqual(await get(), { enabled: false, configured: true, queued: 0, accepted: 0, failed: 0, unconfirmed: 0 });
     assert.equal((await anonymous.request.get(origin + endpoint)).status(), 401);
     assert.equal((await anonymous.request.put(origin + endpoint, { data:{enabled:true} })).status(), 401);
     assert.equal((await page.request.put(origin + endpoint, { data:{enabled:true} })).status(), 403);
@@ -310,6 +311,7 @@ export async function verifyResponseAlerts({ page, ownerRequest, anonymous, db, 
       { status:503, headers:{'retry-after':'30'}, body:{ name:'service_unavailable' } },
       { status:200, body:{ id:'controlled-accepted' } },
       { status:422, body:{ name:'validation_error' } },
+      { status:503, headers:{'retry-after':'60'}, body:{ name:'service_unavailable' } },
     );
     const double = await Promise.all([post(valid), post(valid)]);
     assert.deepEqual(double.map(reply => reply.status()), [200, 200]);
@@ -343,13 +345,26 @@ export async function verifyResponseAlerts({ page, ownerRequest, anonymous, db, 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await capture(page, 'alerts-desktop-failed');
 
+    assert.equal((await post({ ...valid, submissionId:randomUUID(), answers:{ email:'casey.unconfirmed@example.invalid' } })).status(), 200);
+    await expect.poll(() => provider.requests.length).toBe(4);
+    await expect.poll(async () => (await db.query(`
+      SELECT a.state FROM response_alerts a JOIN responses r ON r.id=a.response_id
+      WHERE r.form_id=$1 AND r.answers::jsonb->>'email'=$2`,
+    [form.id, 'casey.unconfirmed@example.invalid'])).rows[0]?.state).toBe('queued');
+    await db.query(`
+      UPDATE response_alerts a SET created_at=now()-interval '24 hours', available_at=now()
+      FROM responses r WHERE r.id=a.response_id AND r.form_id=$1 AND r.answers::jsonb->>'email'=$2`,
+    [form.id, 'casey.unconfirmed@example.invalid']);
+    await expect.poll(async () => (await get()).unconfirmed).toBe(1);
+    await page.reload();
+    await expect(page.locator('#alert-delivery')).toContainText('1 unconfirmed');
     await toggle.press('Space');
     await expect.poll(async () => (await get()).enabled).toBe(false);
     assert.equal((await post({ ...valid, submissionId:randomUUID() })).status(), 200);
-    assert.equal((await db.query('SELECT count(*)::int AS count FROM responses WHERE form_id=$1', [form.id])).rows[0].count, 3);
-    assert.equal(provider.requests.length, 3);
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM responses WHERE form_id=$1', [form.id])).rows[0].count, 4);
+    assert.equal(provider.requests.length, 4);
     assert.equal(provider.responses.length, 0);
-    assert.equal((await db.query('SELECT count(*)::int AS count FROM response_alerts')).rows[0].count, 2);
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM response_alerts')).rows[0].count, 3);
     const signedOut = await anonymous.newPage();
     await signedOut.goto(`${origin}/responses/${form.id}`);
     await expect(signedOut.getByRole('heading', { name:'Welcome back' })).toBeVisible();

@@ -58,7 +58,7 @@ export function createResponseAlerts(pool, appOrigin, environment = process.env,
     running = true;
     try {
       await pool.query(`
-        UPDATE response_alerts SET state='failed'
+        UPDATE response_alerts SET state=CASE WHEN attempts=0 THEN 'failed' ELSE 'unconfirmed' END
         WHERE state IN ('queued','sending')
           AND (created_at <= now() - $1::interval OR (attempts >= $2 AND available_at <= now()))
       `, [retryWindow, maxAttempts]);
@@ -78,7 +78,10 @@ export function createResponseAlerts(pool, appOrigin, environment = process.env,
         `, [maxAttempts, retryWindow]);
         if (!job) break;
         const result = await attempt(job);
-        const state = result.state === 'queued' && job.attempts >= maxAttempts ? 'failed' : result.state;
+        let state = result.state;
+        if ((state === 'queued' && job.attempts >= maxAttempts) || (state === 'failed' && job.attempts > 1)) {
+          state = 'unconfirmed';
+        }
         await pool.query(`
           UPDATE response_alerts
           SET state=$1, provider_id=$2, available_at=now()+$3::integer*interval '1 second'

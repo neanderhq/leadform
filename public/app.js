@@ -604,7 +604,10 @@ async function responsesView(id) {
       </form>
       <p id="response-error" class="error" role="alert" tabindex="-1" hidden></p>
       <div class="response-results-bar">
-        <p id="response-count" class="muted" role="status"></p>
+        <div>
+          <p id="response-count" role="status"></p>
+          <p id="active-response-filters" class="muted"></p>
+        </div>
         <button class="button primary" id="export" type="button">Export CSV</button>
       </div>
       <div id="response-results"></div>
@@ -618,6 +621,7 @@ async function responsesView(id) {
     const filters = document.querySelector('#response-filters');
     const error = document.querySelector('#response-error');
     const count = document.querySelector('#response-count');
+    const applied = document.querySelector('#active-response-filters');
     const results = document.querySelector('#response-results');
     const pager = document.querySelector('.response-pagination');
     const previous = document.querySelector('#previous-response-page');
@@ -638,6 +642,12 @@ async function responsesView(id) {
       const filtered = Boolean(active.search || active.from || active.to);
       const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
       count.textContent = `${data.total} ${filtered ? 'matching' : 'completed'} ${data.total === 1 ? 'response' : 'responses'}`;
+      const criteria = [];
+      if (active.search) criteria.push(`Text “${active.search}”`);
+      if (active.from) criteria.push(`from ${active.from}`);
+      if (active.to) criteria.push(`through ${active.to}`);
+      applied.textContent = filtered ? criteria.join(' · ') : 'Showing all submissions';
+
       exportButton.disabled = pending || data.total === 0;
       previous.disabled = pending || page === 1;
       next.disabled = pending || page >= pages;
@@ -654,6 +664,7 @@ async function responsesView(id) {
       pending = true;
       showError('');
       exportButton.disabled = true;
+      results.setAttribute('aria-busy', 'true');
       try {
         const updated = await query({...values,page:requestedPage});
         if (!results.isConnected) return;
@@ -665,6 +676,7 @@ async function responsesView(id) {
       } finally {
         pending = false;
         if (results.isConnected) {
+          results.removeAttribute('aria-busy');
           render();
           if (moveFocus && error.hidden) {
             const target = requestedPage > 1 && !previous.disabled ? previous : next;
@@ -729,10 +741,12 @@ function mountResponseAlerts(endpoint, initial) {
     configuration.textContent = status.configured
       ? 'The workspace’s configured mailbox receives a private Results link.'
       : 'Email delivery is not configured for this workspace.';
-    delivery.textContent = status.failed
-      ? `${status.failed} failed · ${status.queued} queued · ${status.accepted} accepted by provider. Check the email configuration or provider status.`
-      : `${status.queued} queued · ${status.accepted} accepted by provider`;
-    refresh.hidden = !status.configured && !status.queued && !status.accepted && !status.failed;
+    const labels = [`${status.queued} queued`, `${status.accepted} accepted by provider`];
+    if (status.failed) labels.unshift(`${status.failed} failed`);
+    if (status.unconfirmed) labels.unshift(`${status.unconfirmed} unconfirmed`);
+    const needsAttention = status.failed || status.unconfirmed;
+    delivery.textContent = labels.join(' · ') + (needsAttention ? '. Check the email configuration or provider status.' : '');
+    refresh.hidden = !status.configured && !status.queued && !status.accepted && !needsAttention;
   }
 
   async function load(enabled, interactive = true) {
