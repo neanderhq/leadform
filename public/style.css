@@ -46,3 +46,13 @@
 .share-dialog h2 { margin: 0 0 8px; font-size: 22px; }
 .share-dialog textarea { max-width: 100%; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 .embedded-form .public-inner { padding: 24px 20px 32px; }
+
+.response-alerts { margin-bottom: 14px; padding: 16px 18px; }
+.response-alerts-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 18px; }
+.response-alerts-top + .response-alerts-top { margin-top: 10px; padding-top: 9px; border-top: 1px solid #e5e5e0; }
+.response-alerts h2 { font-size: 17px; margin: 0 0 4px; }
+.response-alerts p { margin: 0; font-size: 13px; }
+.alert-toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.alert-toggle input { width: 18px; height: 18px; margin: 0; flex: none; }
+.response-alerts .button { padding: 6px 8px; }
+#alert-error { margin-top: 9px; }

@@ -2,7 +2,7 @@ FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY --chown=node:node server.js ./
+COPY --chown=node:node server.js response-alerts.js ./
 COPY --chown=node:node db ./db
 COPY --chown=node:node public ./public
 COPY .neander/entrypoint.sh /usr/local/bin/neander-entrypoint

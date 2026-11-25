@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { initializeSchema } from './db/schema.mjs';
+import { createResponseAlerts } from './response-alerts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 for (const name of ['DATABASE_URL', 'OWNER_PASSWORD', 'SESSION_SECRET', 'APP_ORIGIN']) {
@@ -30,6 +31,7 @@ const db = {
   async run(sql, values = []) { return { changes: (await pgPool.query(postgresSql(sql), values)).rowCount }; }
 };
 await initializeSchema(pgPool);
+const alerts = createResponseAlerts(pgPool, appOrigin);
 const sessionSecret = process.env.SESSION_SECRET;
 const sessionStore = new (connectPgSimple(session))({ pool: pgPool, tableName: 'leadform_sessions', createTableIfMissing: false });
 const app = express();
@@ -253,6 +255,32 @@ app.post('/api/forms/:id/responses/query', ownerOnly, asyncRoute(async (req, res
   });
 }));
 
+async function alertSettings(id) {
+  const form = await db.get('SELECT alerts_enabled FROM forms WHERE id=?', [id]);
+  if (!form) return null;
+  const status = await db.get(`
+    SELECT count(*) FILTER (WHERE a.state IN ('queued','sending'))::int AS queued,
+           count(*) FILTER (WHERE a.state='accepted')::int AS accepted,
+           count(*) FILTER (WHERE a.state='failed')::int AS failed
+    FROM response_alerts a JOIN responses r ON r.id=a.response_id WHERE r.form_id=?
+  `, [id]);
+  return { enabled: form.alerts_enabled, configured: alerts.configured, ...status };
+}
+
+app.get('/api/forms/:id/alerts', ownerOnly, asyncRoute(async (req, res) => {
+  void alerts.processQueue();
+  const status = await alertSettings(req.params.id);
+  return status ? res.json(status) : res.status(404).json({ error: 'Form not found' });
+}));
+app.put('/api/forms/:id/alerts', ownerOnly, asyncRoute(async (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'Choose whether to enable email alerts.' });
+  if (enabled && !alerts.configured) return res.status(409).json({ error: 'Email delivery is not configured for this workspace.' });
+  const updated = await db.run('UPDATE forms SET alerts_enabled=? WHERE id=?', [enabled, req.params.id]);
+  if (!updated.changes) return res.status(404).json({ error: 'Form not found' });
+  res.json(await alertSettings(req.params.id));
+}));
+
 const publicForm = async id => {
   const row = await db.get('SELECT published_snapshot FROM forms WHERE id=?', [id]);
   return row?.published_snapshot ? { id, ...row.published_snapshot } : null;
@@ -318,18 +346,43 @@ app.post('/api/public/forms/:id/submit', asyncRoute(async (req, res) => {
     if (answer !== undefined && answer !== null) cleaned[id] = String(answer);
   }
   if (path.at(-1) && nextId(questions.find(item => item.id === path.at(-1)), cleaned[path.at(-1)], questions, questions.findIndex(q => q.id === path.at(-1))) !== null) return res.status(400).json({ error: 'Form is not complete' });
-  const responseId = crypto.randomUUID();
-  const result = await db.run(`
-    INSERT INTO responses (id,form_id,answers,submitted_at)
-    SELECT ?, id, ?, ? FROM forms WHERE id=? AND published_snapshot->>'version'=?
-  `, [responseId, JSON.stringify(cleaned), now(), req.params.id, String(form.version)]);
-  if (!result.changes) {
+  const token = req.body?.submissionId;
+  if (token !== undefined && (typeof token !== 'string' || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(token))) {
+    return res.status(400).json({ error: 'Invalid submission identifier' });
+  }
+  const responseId = token
+    ? crypto.createHash('sha256').update(JSON.stringify([form.id, token.toLowerCase()])).digest('hex')
+    : crypto.randomUUID();
+  const answers = JSON.stringify(cleaned);
+  const message = alerts.payload(form.id);
+  const saved = await db.get(`
+    WITH saved AS (
+      INSERT INTO responses (id,form_id,answers,submitted_at)
+      SELECT ?, id, ?, ? FROM forms WHERE id=? AND published_snapshot->>'version'=?
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id, form_id
+    ), queued AS (
+      INSERT INTO response_alerts (response_id,payload)
+      SELECT saved.id, delivery.payload
+      FROM saved JOIN forms f ON f.id=saved.form_id
+      CROSS JOIN (SELECT ?::jsonb AS payload) delivery
+      WHERE f.alerts_enabled AND delivery.payload IS NOT NULL
+      RETURNING response_id
+    )
+    SELECT (SELECT id FROM saved) AS id, (SELECT response_id FROM queued) AS queued
+  `, [responseId, answers, now(), form.id, String(form.version), message ? JSON.stringify(message) : null]);
+  if (!saved.id) {
+    const replay = token && await db.get('SELECT answers FROM responses WHERE id=? AND form_id=?', [responseId, form.id]);
+    if (replay) return replay.answers === answers
+      ? res.json({ ok: true })
+      : res.status(409).json({ error: 'This submission was already received with different answers.' });
     return res.status(409).json({ error: 'This form changed while you were answering. Reload to use the current version.' });
   }
   res.json({ ok: true });
+  if (saved.queued) void alerts.processQueue();
 }));
 
-app.get('/embed/:id', (_req, res) => {
+app.get(/^\/embed\/[^/]+$/, (_req, res) => {
   res.set('Content-Security-Policy', `frame-ancestors ${embedAncestors}`);
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -342,4 +395,10 @@ app.get('/vendor/purify.min.js', (_req, res) => res.sendFile(path.join(__dirname
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 const port = Number(process.env.PORT) || 3000;
-app.listen(port, '0.0.0.0', () => console.log(`Leadform listening on http://localhost:${port}`));
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Leadform listening on http://localhost:${port}`);
+  if (alerts.configured) {
+    void alerts.processQueue();
+    setInterval(() => void alerts.processQueue(), 2000).unref();
+  }
+});

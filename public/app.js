@@ -357,6 +357,7 @@ function mountRespondent(form,preview,embedded) {
   let done = false;
   let errorMessage = '';
   let submitting = false;
+  const submissionId = globalThis.crypto?.randomUUID?.();
   const design={...defaults,...(form.design||{})};
   const color = (value, fallback) => /^#[\da-f]{6}$/i.test(String(value)) ? value : fallback;
   const css=`--primary:${color(design.primary, defaults.primary)};--bg:${color(design.background, defaults.background)};--text:${color(design.text, defaults.text)}`;
@@ -541,7 +542,7 @@ function mountRespondent(form,preview,embedded) {
     render();
     const submittingView = app.firstElementChild;
     try {
-      await api(`/api/public/forms/${encodeURIComponent(form.id)}/submit`, {method: 'POST', body: json({answers, version: form.version})});
+      await api(`/api/public/forms/${encodeURIComponent(form.id)}/submit`, {method: 'POST', body: json({answers, version: form.version, submissionId})});
       done = true;
     } catch (error) {
       errorMessage = error.message;
@@ -569,11 +570,28 @@ async function responsesView(id) {
   const query = values => api(endpoint, {method:'POST',body:json(values)});
   const emptyFilters = {search:'',from:'',to:''};
   try {
-    const [form, initial] = await Promise.all([api(`/api/forms/${encodeURIComponent(id)}`), query({})]);
+    const alertsEndpoint = `/api/forms/${encodeURIComponent(id)}/alerts`;
+    const [form, initial, alertStatus] = await Promise.all([
+      api(`/api/forms/${encodeURIComponent(id)}`), query({}), api(alertsEndpoint),
+    ]);
     if (location.pathname !== `/responses/${encodeURIComponent(id)}`) return;
     app.innerHTML = DOMPurify.sanitize(`<main class="shell">
       ${header(`<button class="button" data-nav="/edit/${esc(form.id)}">Edit form</button><button class="button" data-nav="/">Dashboard</button>`)}
       <section class="responses-head"><div><p class="eyebrow">Responses</p><h1 class="page-title">${esc(form.title)}</h1></div></section>
+      <section id="response-alerts" class="panel response-alerts" aria-labelledby="response-alerts-heading">
+        <div class="response-alerts-top">
+          <div>
+            <h2 id="response-alerts-heading">Email alerts</h2>
+            <p id="alert-configuration" class="muted"></p>
+          </div>
+          <label class="alert-toggle"><input type="checkbox" id="enable-response-alerts"> Email me about new responses</label>
+        </div>
+        <div class="response-alerts-top">
+          <p id="alert-delivery" class="muted" role="status"></p>
+          <button class="button ghost" id="refresh-alert-delivery" type="button">Refresh delivery status</button>
+        </div>
+        <p id="alert-error" class="error" role="alert" hidden></p>
+      </section>
       <form id="response-filters" class="panel response-filters">
         <div class="response-filter-fields">
           <div class="field"><label for="response-search">Search answers</label><input id="response-search" name="search" type="search" maxlength="200" placeholder="Name, email or answer"></div>
@@ -596,6 +614,7 @@ async function responsesView(id) {
         <button class="button" id="next-response-page" type="button">Next page</button>
       </nav>
     </main>`);
+    mountResponseAlerts(alertsEndpoint, alertStatus);
     const filters = document.querySelector('#response-filters');
     const error = document.querySelector('#response-error');
     const count = document.querySelector('#response-count');
@@ -692,6 +711,64 @@ async function responsesView(id) {
     app.innerHTML = DOMPurify.sanitize(`<main class="shell"><p class="error">${esc(error.message)}</p></main>`);
   }
 }
+function mountResponseAlerts(endpoint, initial) {
+  const panel = document.querySelector('#response-alerts');
+  const toggle = panel.querySelector('#enable-response-alerts');
+  const configuration = panel.querySelector('#alert-configuration');
+  const delivery = panel.querySelector('#alert-delivery');
+  const refresh = panel.querySelector('#refresh-alert-delivery');
+  const error = panel.querySelector('#alert-error');
+  let status = initial;
+  let pending = false;
+  let timer;
+
+  function render() {
+    toggle.checked = status.enabled;
+    toggle.disabled = pending || (!status.configured && !status.enabled);
+    refresh.disabled = pending;
+    configuration.textContent = status.configured
+      ? 'The workspace’s configured mailbox receives a private Results link.'
+      : 'Email delivery is not configured for this workspace.';
+    delivery.textContent = status.failed
+      ? `${status.failed} failed · ${status.queued} queued · ${status.accepted} accepted by provider. Check the email configuration or provider status.`
+      : `${status.queued} queued · ${status.accepted} accepted by provider`;
+    refresh.hidden = !status.configured && !status.queued && !status.accepted && !status.failed;
+  }
+
+  async function load(enabled, interactive = true) {
+    if (!panel.isConnected || pending) return;
+    clearTimeout(timer);
+    pending = true;
+    toggle.disabled = true;
+    refresh.disabled = true;
+    error.hidden = true;
+    try {
+      status = await api(endpoint, enabled === undefined ? {} : {method:'PUT',body:json({enabled})});
+    } catch (loadError) {
+      error.textContent = loadError.message;
+      error.hidden = false;
+    } finally {
+      pending = false;
+      if (!panel.isConnected) return;
+      render();
+      if (interactive) {
+        const trigger = enabled === undefined ? refresh : toggle;
+        trigger.focus();
+      }
+      schedule();
+    }
+  }
+
+  function schedule() {
+    if (status.configured && status.queued) timer = setTimeout(() => load(undefined, false), 2000);
+  }
+
+  refresh.onclick = () => load();
+  toggle.onchange = () => load(toggle.checked);
+  render();
+  schedule();
+}
+
 function downloadCsv(form,questions,responses) {
   const safeCell=value=>{
     const text=String(value??'');
