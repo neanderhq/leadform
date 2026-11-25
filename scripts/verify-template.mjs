@@ -9,6 +9,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, expect } from '@playwright/test';
 import { Client } from 'pg';
 import { seed } from '../.neander/seed.mjs';
+import {
+  startControlledAlertProvider, verifyInlineEmbed, verifyResponseAlerts, verifyResponseFilters, verifyUnconfiguredAlerts,
+} from './verify-features.mjs';
 
 const exec = promisify(execFile);
 const image = process.env.NEANDER_TEMPLATE_IMAGE;
@@ -26,10 +29,12 @@ const runtimeDatabase = new URL(databaseUrl);
 if (process.platform === 'darwin' && ['localhost', '127.0.0.1'].includes(runtimeDatabase.hostname)) runtimeDatabase.hostname = 'host.docker.internal';
 const environment = { DATABASE_URL: runtimeDatabase.href, OWNER_PASSWORD: process.env.OWNER_PASSWORD, SESSION_SECRET: process.env.SESSION_SECRET, APP_ORIGIN: origin.origin };
 assert.ok(environment.OWNER_PASSWORD && environment.SESSION_SECRET);
-await writeFile(bundle, Object.entries(environment).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', { mode: 0o644 });
+const writeRuntime = options => writeFile(bundle, Object.entries({ ...environment, ...options }).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', { mode: 0o644 });
+await writeRuntime();
 const db = new Client({ connectionString: databaseUrl });
 let browser;
 let connected = false;
+let controlledProvider;
 async function ready() {
   for (let attempt = 0; attempt < 120; attempt++) {
     try { if ((await fetch(`${origin.origin}/api/session`)).ok) return; } catch {}
@@ -41,9 +46,13 @@ async function json(response, status = 200) {
   assert.equal(response.status(), status, await response.text());
   return response.json();
 }
+const networking = process.platform === 'linux' ? ['--network', 'host', '--env', `PORT=${origin.port || 80}`] : ['--publish', `127.0.0.1:${origin.port || 80}:8080`];
+const startContainer = (extra = []) => exec('docker', [
+  'run', '--detach', '--name', name, '--mount', `type=bind,src=${bundle},dst=/run/secrets/neander_environment,readonly`,
+  ...networking, ...extra, image,
+], { timeout: 60000 });
 try {
-  const networking = process.platform === 'linux' ? ['--network', 'host', '--env', `PORT=${origin.port || 80}`] : ['--publish', `127.0.0.1:${origin.port || 80}:8080`];
-  await exec('docker', ['run', '--detach', '--name', name, '--mount', `type=bind,src=${bundle},dst=/run/secrets/neander_environment,readonly`, ...networking, image], { timeout: 60000 });
+  await startContainer();
   await ready();
   await db.connect(); connected = true;
   assert.equal((await db.query('SELECT count(*)::int AS count FROM forms')).rows[0].count, 3);
@@ -229,6 +238,10 @@ try {
   const csv = await readFile(await download.path(), 'utf8');
   assert.ok(csv.includes('casey.template@example.invalid') && csv.includes('Alex Rivera'));
 
+  await verifyResponseFilters({ db, ownerRequest, anonymous, origin: origin.origin, page });
+  await verifyInlineEmbed({ ownerRequest, anonymous, origin: origin.origin, page });
+  await verifyUnconfiguredAlerts({ db, ownerRequest, origin: origin.origin, page });
+
   const deletedForm = (await db.query('SELECT * FROM forms WHERE id=$1', ['sample-event-registration'])).rows[0];
   const deletedResponses = (await db.query('SELECT * FROM responses WHERE form_id=$1', [deletedForm.id])).rows;
   await json(await ownerRequest('delete', `/api/forms/${deletedForm.id}`));
@@ -274,6 +287,21 @@ try {
   await db.query('DELETE FROM responses WHERE id=$1', [added.id]);
   await db.query('INSERT INTO forms (id,title,description,questions,design,created_at,updated_at,draft_version,published_snapshot) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [deletedForm.id, deletedForm.title, deletedForm.description, deletedForm.questions, deletedForm.design, deletedForm.created_at, deletedForm.updated_at, deletedForm.draft_version, deletedForm.published_snapshot]);
   for (const row of deletedResponses) await db.query('INSERT INTO responses (id,form_id,answers,submitted_at) VALUES ($1,$2,$3,$4)', [row.id, row.form_id, row.answers, row.submitted_at]);
+  await exec('docker', ['rm', '--force', name]);
+  controlledProvider = await startControlledAlertProvider();
+  await writeRuntime(controlledProvider.config);
+  const preload = join(directory, 'leadform-test-provider.mjs');
+  await writeFile(preload, controlledProvider.preload, { mode:0o644 });
+  await startContainer([
+    '--mount', `type=bind,src=${preload},dst=/run/leadform-test-provider.mjs,readonly`,
+    '--env', 'NODE_OPTIONS=--import=/run/leadform-test-provider.mjs',
+  ]);
+  await ready();
+  await verifyResponseAlerts({
+    page, ownerRequest, anonymous, db, origin:origin.origin, provider:controlledProvider, ownerPassword:environment.OWNER_PASSWORD,
+    restart: async () => { await exec('docker', ['restart', name]); await ready(); },
+  });
+  assert.deepEqual(pageErrors, []);
   console.log('Built-image verification passed: mounted runtime secret bundle, owner login, seeded editor, private drafts, explicit publication and version checks, public branching/submission/validation, responses/CSV, concurrent seed retries, preserved edits/deletion, and database/session persistence after restart.');
 } catch (error) {
   const logs = await exec('docker', ['logs', '--tail', '80', name]).catch(() => ({ stdout: '', stderr: '' }));
@@ -283,5 +311,6 @@ try {
   if (browser) await browser.close();
   if (connected) await db.end();
   await exec('docker', ['rm', '--force', name]).catch(() => {});
+  if (controlledProvider) await controlledProvider.close();
   await rm(directory, { recursive: true, force: true });
 }

@@ -24,3 +24,40 @@
 
 .editor-publication{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;font-size:13px;margin:0 0 7px}.editor-publication .save-state{margin:0}
 #publish[aria-disabled="true"],#copy-link:disabled{opacity:.55;cursor:default}
+
+.response-filters { margin-bottom: 14px; }
+.response-filter-fields { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; }
+.response-filter-fields .field { min-width: 0; margin-bottom: 12px; }
+.response-filter-fields input { width: 100%; min-width: 0; }
+.response-actions, .response-results-bar, .response-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.response-results-bar { justify-content: space-between; margin: 14px 0; }
+.response-results-bar p { margin: 0; }
+.response-results-bar > div { min-width: 0; }
+#response-count { font-weight: 600; }
+#active-response-filters { font-size: 13px; overflow-wrap: anywhere; }
+.response-pagination { justify-content: center; margin-top: 18px; }
+.response-pagination[hidden] { display: none; }
+#response-error:focus { outline-offset: 4px; }
+@media (max-width: 600px) {
+  .response-filter-fields { grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .response-filter-fields .field:first-child { grid-column: 1 / -1; }
+  .response-filters { padding: 15px; }
+}
+
+.share-dialog { width: min(540px, calc(100% - 32px)); border: 1px solid #e5e5e0; border-radius: 14px; padding: 22px; }
+.share-dialog::backdrop { background: rgb(32 33 36 / 48%); }
+.share-dialog h2 { margin: 0 0 8px; font-size: 22px; }
+.share-dialog textarea { max-width: 100%; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.embedded-form .public-inner { padding: 24px 20px 32px; }
+
+.response-alerts { margin-bottom: 14px; padding: 16px 18px; }
+.response-alerts-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 18px; }
+.response-alerts-top + .response-alerts-top { margin-top: 10px; padding-top: 9px; border-top: 1px solid #e5e5e0; }
+.response-alerts h2 { font-size: 17px; margin: 0 0 4px; }
+.response-alerts p { margin: 0; font-size: 13px; }
+.alert-toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.alert-toggle input { width: 18px; height: 18px; margin: 0; flex: none; }
+.response-alerts .button { padding: 6px 8px; }
+#alert-error { margin-top: 9px; }
+
+#export:disabled { background: #e7e7e3; color: #595a5b; border-color: #deded9; cursor: not-allowed; }
