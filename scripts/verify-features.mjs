@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect } from '@playwright/test';
@@ -105,4 +106,101 @@ export async function verifyResponseFilters({ db, ownerRequest, anonymous, origi
     for (const id of [form.id, other.id]) await ownerRequest('delete', `/api/forms/${id}`);
   }
   console.log('Response filters verified: literal search, UTC boundaries, multiple pages, CSV protections, reload/reset, keyboard and owner/form boundaries.');
+}
+
+export async function verifyInlineEmbed({ ownerRequest, anonymous, origin, page }) {
+  const questions = [{ id: 'email', title: 'Contact email', type: 'email', required: true }];
+  const response = await ownerRequest('post', '/api/forms', { data: { title: 'Copper Finch studio' } });
+  assert.equal(response.status(), 201);
+  const form = await response.json();
+  const editor = `${origin}/edit/${form.id}`;
+  const embed = `${origin}/embed/${form.id}`;
+  const nested = await anonymous.newPage();
+  let snippet = `<iframe title="Leadform response form" src="${embed}"></iframe>`;
+  const host = createServer((_request, reply) => {
+    reply.setHeader('Content-Type', 'text/html; charset=utf-8');
+    reply.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>Fictional studio</title><style>body{margin:12px;font:16px system-ui}button{margin-bottom:12px}</style>
+      <main><h1>Copper Finch studio</h1><button autofocus>Before form</button>${snippet}<button>After form</button></main></html>`);
+  });
+  await new Promise(resolve => host.listen(0, '127.0.0.1', resolve));
+  const hostOrigin = `http://127.0.0.1:${host.address().port}`;
+  try {
+    const saveDraft = async (earlier, title) => {
+      const saved = await ownerRequest('put', `/api/forms/${form.id}`, { data: { ...earlier, title, questions } });
+      assert.ok(saved.ok());
+      return saved.json();
+    };
+    const publish = async draft => {
+      const published = await ownerRequest('post', `/api/forms/${form.id}/publish`, { data: { version: draft.draft_version } });
+      assert.ok(published.ok());
+      return published.json();
+    };
+    const draft = await saveDraft(form, form.title);
+    await page.goto(editor);
+    await expect(page.getByRole('button', { name: 'Embed on website' })).toBeDisabled();
+    await nested.goto(hostOrigin);
+    const frame = nested.frameLocator('iframe');
+    await expect(frame.getByRole('heading', { name: 'Form not found' })).toBeVisible();
+    await capture(nested, 'embed-phone-unavailable');
+    await publish(draft);
+    await page.reload();
+    const embedButton = page.getByRole('button', { name: 'Embed on website' });
+    await embedButton.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Embed on your website' });
+    await expect(dialog).toBeVisible();
+    snippet = await dialog.getByLabel('Embed code').inputValue();
+    assert.ok(snippet.includes(`src="${embed}"`) && snippet.includes('title='));
+    await capture(page, 'embed-desktop-snippet');
+    await dialog.getByRole('button', { name: 'Copy embed code' }).press('Enter');
+    await expect(dialog.getByRole('status')).toHaveText(/Embed code copied|Copy the selected embed code/);
+    await dialog.getByRole('button', { name: 'Done' }).press('Enter');
+    await expect(embedButton).toBeFocused();
+
+    const before = nested.getByRole('button', { name: 'Before form' });
+    await nested.reload();
+    const input = frame.getByLabel('Contact email');
+    await expect(input).toBeVisible();
+    await expect(before).toBeFocused();
+    assert.equal(await nested.evaluate(() => document.documentElement.scrollWidth), 375);
+    await before.press('Tab');
+    await expect(input).toBeFocused();
+    await input.press('Enter');
+    await expect(frame.getByRole('alert')).toHaveText('This question is required');
+    await expect(input).toBeFocused();
+    await capture(nested, 'embed-phone-validation');
+    await input.pressSequentially('copper.embed@example.invalid');
+    await input.press('Enter');
+    const confirmation = frame.getByRole('heading', { name: 'Thank you' });
+    await expect(confirmation).toBeFocused();
+    await capture(nested, 'embed-phone-confirmation');
+    await confirmation.press('Tab');
+    await expect(nested.getByRole('button', { name: 'After form' })).toBeFocused();
+    await page.goto(`${origin}/responses/${form.id}`);
+    await page.reload();
+    await expect(page.getByText('copper.embed@example.invalid', { exact: true })).toBeVisible();
+    assert.equal((await (await ownerRequest('get', `/api/forms/${form.id}/responses`)).json()).responses.length, 1);
+
+    const newer = await saveDraft(draft, 'Copper Finch version two');
+    await nested.reload();
+    await expect(frame.getByRole('heading', { name: form.title })).toBeVisible();
+    await publish(newer);
+    await nested.reload();
+    await expect(frame.getByRole('heading', { name: 'Copper Finch version two' })).toBeVisible();
+    for (const route of ['/edit/', '/preview/', '/responses/', '/f/']) {
+      const document = await anonymous.request.get(origin + route + form.id);
+      assert.equal(document.headers()['content-security-policy'], "frame-ancestors 'none'");
+      assert.equal(document.headers()['x-frame-options'], 'DENY');
+    }
+    assert.equal((await anonymous.request.post(`${origin}/api/forms/${form.id}/responses/query`, { data: {} })).status(), 401);
+    const removed = await ownerRequest('delete', `/api/forms/${form.id}`);
+    assert.ok(removed.ok());
+    await nested.reload();
+    await expect(frame.getByRole('heading', { name: 'Form not found' })).toBeVisible();
+  } finally {
+    await nested.close();
+    await new Promise((resolve, reject) => host.close(error => error ? reject(error) : resolve()));
+    await ownerRequest('delete', `/api/forms/${form.id}`);
+  }
+  console.log('Inline embed verified: external host, publication boundary, protected pages, 375px fit, keyboard recovery, persisted response and deletion.');
 }

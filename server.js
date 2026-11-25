@@ -13,7 +13,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 for (const name of ['DATABASE_URL', 'OWNER_PASSWORD', 'SESSION_SECRET', 'APP_ORIGIN']) {
   if (!process.env[name]) throw new Error(`${name} is required`);
 }
-const appOrigin = new URL(process.env.APP_ORIGIN).origin;
+const appUrl = new URL(process.env.APP_ORIGIN);
+const appOrigin = appUrl.origin;
+const loopback = appUrl.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(appUrl.hostname);
+const embedAncestors = loopback
+  ? 'https: http://localhost:* http://127.0.0.1:* http://[::1]:*'
+  : 'https:';
 const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
 const postgresSql = sql => {
   let parameterIndex = 0;
@@ -324,6 +329,15 @@ app.post('/api/public/forms/:id/submit', asyncRoute(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.get('/embed/:id', (_req, res) => {
+  res.set('Content-Security-Policy', `frame-ancestors ${embedAncestors}`);
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+app.use((_req, res, next) => {
+  res.set('Content-Security-Policy', "frame-ancestors 'none'");
+  res.set('X-Frame-Options', 'DENY');
+  next();
+});
 app.get('/vendor/purify.min.js', (_req, res) => res.sendFile(path.join(__dirname, 'node_modules/dompurify/dist/purify.min.js')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

@@ -46,6 +46,7 @@ function showToast(message) { const node=document.createElement('div');node.clas
 
 async function route() {
   const pathname=location.pathname;
+  if (pathname.startsWith('/embed/')) return publicView(decodeURIComponent(pathname.slice(7)), false, true);
   if (pathname.startsWith('/f/')) return publicView(decodeURIComponent(pathname.slice(3)), false);
   if (pathname.startsWith('/preview/')) return publicView(decodeURIComponent(pathname.slice(9)), true);
   if (pathname.startsWith('/responses/')) return responsesView(decodeURIComponent(pathname.slice(11)));
@@ -107,12 +108,13 @@ function publicationLabel(form) {
 function renderEditor() {
   const form=currentForm;form.design={...defaults,...form.design};form.questions ||= [];
   editorDirty=false;
-  app.innerHTML=DOMPurify.sanitize(`<main class="shell editor-shell"><header class="editor-head"><div><button class="button ghost" data-nav="/">← Dashboard</button><h1 class="editor-title">Edit form</h1></div><div class="top-actions"><button class="button" id="preview">Preview</button><button class="button" id="copy-link">Copy link</button><button class="button" id="save">Save draft</button><button class="button primary" id="publish">Publish</button></div></header><div class="editor-publication"><strong id="publication-state">${publicationLabel(form)}</strong><span id="save-state" class="save-state" role="status"></span></div><p class="editor-sharing-note">Save draft to keep your edits private. Publish updates the form at its public link.</p><div class="editor-layout"><section><div class="panel"><div class="field"><label for="form-title">Form title</label><input id="form-title" class="control" value="${esc(form.title)}" maxlength="200"></div><div class="field"><label for="form-description">Description</label><textarea id="form-description" class="control">${esc(form.description)}</textarea></div></div><div class="panel" style="margin-top:16px"><p class="section-label">Questions</p><div id="questions">${form.questions.map((q,i)=>questionTemplate(q,i,form.questions)).join('')}</div><button class="button" id="add-question">＋ Add question</button></div></section><aside class="panel side-panel"><p class="section-label">Design</p><div class="color-row"><label for="primary-color">Primary color</label><input type="color" id="primary-color" value="${esc(form.design.primary)}"></div><div class="color-row"><label for="background-color">Background</label><input type="color" id="background-color" value="${esc(form.design.background)}"></div><div class="color-row"><label for="text-color">Text color</label><input type="color" id="text-color" value="${esc(form.design.text)}"></div><div class="field" style="margin-top:18px"><label for="logo-url">Logo image URL</label><input id="logo-url" class="control" type="url" placeholder="https://…" value="${esc(form.design.logo)}"><div class="logo-preview-wrap"><img id="logo-preview" alt="Logo preview"><span id="logo-preview-empty">Logo preview appears here</span></div></div><p class="hint">Preview includes unsaved edits. Respondents see the published version.</p></aside></div></main>`);
+  app.innerHTML=DOMPurify.sanitize(`<main class="shell editor-shell"><header class="editor-head"><div><button class="button ghost" data-nav="/">← Dashboard</button><h1 class="editor-title">Edit form</h1></div><div class="top-actions"><button class="button" id="preview">Preview</button><button class="button" id="copy-link">Copy link</button><button class="button" id="embed-form">Embed on website</button><button class="button" id="save">Save draft</button><button class="button primary" id="publish">Publish</button></div></header><div class="editor-publication"><strong id="publication-state">${publicationLabel(form)}</strong><span id="save-state" class="save-state" role="status"></span></div><p class="editor-sharing-note">Save draft to keep your edits private. Publish updates the form at its public link.</p><div class="editor-layout"><section><div class="panel"><div class="field"><label for="form-title">Form title</label><input id="form-title" class="control" value="${esc(form.title)}" maxlength="200"></div><div class="field"><label for="form-description">Description</label><textarea id="form-description" class="control">${esc(form.description)}</textarea></div></div><div class="panel" style="margin-top:16px"><p class="section-label">Questions</p><div id="questions">${form.questions.map((q,i)=>questionTemplate(q,i,form.questions)).join('')}</div><button class="button" id="add-question">＋ Add question</button></div></section><aside class="panel side-panel"><p class="section-label">Design</p><div class="color-row"><label for="primary-color">Primary color</label><input type="color" id="primary-color" value="${esc(form.design.primary)}"></div><div class="color-row"><label for="background-color">Background</label><input type="color" id="background-color" value="${esc(form.design.background)}"></div><div class="color-row"><label for="text-color">Text color</label><input type="color" id="text-color" value="${esc(form.design.text)}"></div><div class="field" style="margin-top:18px"><label for="logo-url">Logo image URL</label><input id="logo-url" class="control" type="url" placeholder="https://…" value="${esc(form.design.logo)}"><div class="logo-preview-wrap"><img id="logo-preview" alt="Logo preview"><span id="logo-preview-empty">Logo preview appears here</span></div></div><p class="hint">Preview includes unsaved edits. Respondents see the published version.</p></aside></div></main>`);
   const getSnapshot=()=>editorSnapshot();
   const saveState = document.querySelector('#save-state');
   const saveButton = document.querySelector('#save');
   const publishButton = document.querySelector('#publish');
   const copyButton = document.querySelector('#copy-link');
+  const embedButton = document.querySelector('#embed-form');
   const publicationState = document.querySelector('#publication-state');
   let savedForm = form;
   let editVersion = 0;
@@ -121,6 +123,7 @@ function renderEditor() {
   const updatePublication = () => {
     const hasPublicForm = savedForm.published_version !== null;
     copyButton.disabled = !hasPublicForm;
+    embedButton.disabled = !hasPublicForm;
     const canPublish = !editorDirty && !saving && !publishing && savedForm.questions.length > 0
       && savedForm.draft_version !== savedForm.published_version;
     publishButton.setAttribute('aria-disabled', String(!canPublish));
@@ -266,6 +269,7 @@ function renderEditor() {
   document.querySelector('#logo-url').addEventListener('input',()=>{markUnsaved();updateLogoPreview()});
   updateLogoPreview();
   document.querySelector('#preview').onclick=()=>{const draft=getSnapshot();sessionStorage.setItem('leadform-preview',json(draft));window.open(`/preview/${draft.id}`,'_blank')};
+  embedButton.onclick = () => showEmbedSnippet(form.id, embedButton);
   copyButton.onclick = async () => {
     const link = `${location.origin}/f/${form.id}`;
     try {
@@ -275,6 +279,49 @@ function renderEditor() {
       window.prompt('Copy the public link', link);
     }
   };
+}
+
+
+function showEmbedSnippet(id, trigger) {
+  const url = `${location.origin}/embed/${encodeURIComponent(id)}`;
+  const dialog = document.createElement('dialog');
+  dialog.className = 'share-dialog';
+  dialog.setAttribute('aria-labelledby', 'embed-heading');
+  dialog.innerHTML = DOMPurify.sanitize(`
+    <h2 id="embed-heading">Embed on your website</h2>
+    <p class="muted">Paste this code into an HTML block on your website. The embed uses the published form.</p>
+    <div class="field">
+      <label for="embed-code">Embed code</label>
+      <textarea id="embed-code" rows="4" readonly></textarea>
+    </div>
+    <div class="response-actions">
+      <button class="button primary" id="copy-embed-code" type="button">Copy embed code</button>
+      <button class="button" id="close-embed" type="button">Done</button>
+    </div>
+    <p id="embed-copy-status" role="status" class="muted" hidden></p>
+  `);
+  const code = dialog.querySelector('#embed-code');
+  code.value = `<iframe src="${esc(url)}" title="Leadform response form" style="display:block;width:100%;height:650px;border:0"></iframe>`;
+  const notice = dialog.querySelector('#embed-copy-status');
+  dialog.querySelector('#copy-embed-code').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(code.value);
+      notice.textContent = 'Embed code copied.';
+    } catch {
+      code.focus();
+      code.select();
+      notice.textContent = 'Copy the selected embed code.';
+    }
+    notice.hidden = false;
+  };
+  dialog.querySelector('#close-embed').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => {
+    dialog.remove();
+    trigger.focus();
+  }, {once:true});
+  app.append(dialog);
+  dialog.showModal();
+  dialog.querySelector('#copy-embed-code').focus();
 }
 
 function calculatePath(form,answers) {
@@ -297,13 +344,13 @@ const validateAnswer=(question,value)=>{
   if(question.type==='number'&&!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(String(value).trim()))return 'Please enter a valid number';
   return '';
 };
-async function publicView(id,preview) {
+async function publicView(id,preview,embedded=false) {
   let form;
   if(preview){try{form=JSON.parse(sessionStorage.getItem('leadform-preview')||'null');if(!form||form.id!==id)throw new Error('Preview is no longer available')}catch(error){app.innerHTML=DOMPurify.sanitize(`<main class="shell"><p>${esc(error.message)}</p></main>`);return}}
-  else {try{form=await api(`/api/public/forms/${encodeURIComponent(id)}`)}catch(error){app.innerHTML=DOMPurify.sanitize(`<main class="shell"><section class="empty"><h2>Form not found</h2><p>This form may have been deleted or the link may be incorrect.</p></section></main>`);return}}
-  mountRespondent(form,preview);
+  else {try{form=await api(`/api/public/forms/${encodeURIComponent(id)}`)}catch(error){app.innerHTML=DOMPurify.sanitize(`<main class="shell"><section class="empty"><h2>Form not found</h2><p>This form may be unpublished, deleted or linked incorrectly.</p></section></main>`);return}}
+  mountRespondent(form,preview,embedded);
 }
-function mountRespondent(form,preview) {
+function mountRespondent(form,preview,embedded) {
   const questions = form.questions || [];
   const answers = Object.create(null);
   let activeId = questions[0]?.id || null;
@@ -368,7 +415,7 @@ function mountRespondent(form,preview) {
       ${question.required ? 'required' : ''} ${error} ${submitting ? 'readonly' : ''}
       autocomplete="${type === 'email' ? 'email' : 'off'}" placeholder="Type your answer here…">`;
   };
-  const render = preferredChoice => {
+  const render = (preferredChoice, focusQuestion = true) => {
     const path = calculatePath(form, answers);
     const question = questions.find(q => q.id === activeId);
     const number = path.indexOf(activeId) + 1;
@@ -394,7 +441,7 @@ function mountRespondent(form,preview) {
           <button type="button" class="ok-button" id="next" ${submitting ? 'disabled' : ''}>${action}</button>
         </div>`;
     }
-    app.innerHTML = DOMPurify.sanitize(`<main class="public-page" style="${css}">
+    app.innerHTML = DOMPurify.sanitize(`<main class="public-page${embedded ? ' embedded-form' : ''}" style="${css}">
       <div class="public-top"><div class="public-progress" role="progressbar" aria-label="Form progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}" style="width:${progress}%"></div></div>
       <div class="public-inner">
         ${preview ? '<p class="preview-label">Preview mode</p>' : ''}
@@ -418,7 +465,7 @@ function mountRespondent(form,preview) {
       const selected = preferredChoice ?? answers[question.id];
       const focus = answer || buttons.find(button => button.dataset.choice === selected)
         || buttons[0] || app.querySelector('#question-title');
-      focus.focus();
+      if (focusQuestion) focus.focus();
     }
     answer?.addEventListener('input', () => {
       answers[question.id] = answer.value;
@@ -503,7 +550,7 @@ function mountRespondent(form,preview) {
       if (app.firstElementChild === submittingView) render();
     }
   };
-  render();
+  render(undefined, !embedded);
 }
 
 function responseTable(questions, responses) {
