@@ -191,6 +191,63 @@ app.get('/api/forms/:id/responses', ownerOnly, asyncRoute(async (req, res) => {
   res.json({ questions: form.published_snapshot?.questions ?? [], responses: responses.map(r => ({ id: r.id, answers: JSON.parse(r.answers), submittedAt: r.submitted_at })) });
 }));
 
+
+const responsePageSize = 20;
+const isUtcDay = value => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000-')) return false;
+  const date = new Date(value + 'T00:00:00.000Z');
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+};
+
+app.post('/api/forms/:id/responses/query', ownerOnly, asyncRoute(async (req, res) => {
+  const { search = '', from = '', to = '', page = 1, exportAll = false } = req.body ?? {};
+  if (typeof search !== 'string' || search.length > 200 || search.includes(String.fromCharCode(0))) {
+    return res.status(400).json({ error: 'Enter search text of up to 200 characters.' });
+  }
+  if (typeof from !== 'string' || typeof to !== 'string' || (from && !isUtcDay(from)) || (to && !isUtcDay(to))) {
+    return res.status(400).json({ error: 'Enter valid UTC dates.' });
+  }
+  if (from && to && from > to) return res.status(400).json({ error: 'End date must be on or after start date.' });
+  if (!Number.isSafeInteger(page) || page < 1 || page > 1000000 || typeof exportAll !== 'boolean') {
+    return res.status(400).json({ error: 'Invalid response page.' });
+  }
+
+  const form = await db.get('SELECT published_snapshot FROM forms WHERE id=?', [req.params.id]);
+  if (!form) return res.status(404).json({ error: 'Form not found' });
+
+  // Submission timestamps are stored as UTC ISO strings, including the existing seed and historical records.
+  const term = search.trim();
+  const where = ['r.form_id=?'];
+  const params = [req.params.id];
+  if (from) {
+    where.push('r.submitted_at>=?');
+    params.push(from + 'T00:00:00.000Z');
+  }
+  if (to) {
+    where.push('left(r.submitted_at,10)<=?');
+    params.push(to);
+  }
+  if (term) {
+    where.push('EXISTS (SELECT 1 FROM jsonb_each_text(r.answers::jsonb) answer WHERE strpos(lower(answer.value),lower(?))>0)');
+    params.push(term);
+  }
+  const result = await db.get(`
+    WITH matching AS (SELECT r.id, r.answers, r.submitted_at FROM responses r WHERE ${where.join(' AND ')}),
+         response_page AS (
+           SELECT * FROM matching ORDER BY submitted_at DESC, id DESC ${exportAll ? '' : 'LIMIT ? OFFSET ?'}
+         )
+    SELECT (SELECT count(*)::int FROM matching) AS total,
+           COALESCE(json_agg(response_page ORDER BY submitted_at DESC, id DESC), '[]') AS rows
+    FROM response_page
+  `, exportAll ? params : [...params, responsePageSize, (page - 1) * responsePageSize]);
+  res.json({
+    questions: form.published_snapshot?.questions ?? [],
+    responses: result.rows.map(row => ({ id: row.id, answers: JSON.parse(row.answers), submittedAt: row.submitted_at })),
+    total: result.total,
+    pageSize: responsePageSize,
+  });
+}));
+
 const publicForm = async id => {
   const row = await db.get('SELECT published_snapshot FROM forms WHERE id=?', [id]);
   return row?.published_snapshot ? { id, ...row.published_snapshot } : null;

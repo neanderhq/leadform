@@ -24,3 +24,19 @@
 
 .editor-publication{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;font-size:13px;margin:0 0 7px}.editor-publication .save-state{margin:0}
 #publish[aria-disabled="true"],#copy-link:disabled{opacity:.55;cursor:default}
+
+.response-filters { margin-bottom: 14px; }
+.response-filter-fields { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; }
+.response-filter-fields .field { min-width: 0; margin-bottom: 12px; }
+.response-filter-fields input { width: 100%; min-width: 0; }
+.response-actions, .response-results-bar, .response-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.response-results-bar { justify-content: space-between; margin: 14px 0; }
+.response-results-bar p { margin: 0; }
+.response-pagination { justify-content: center; margin-top: 18px; }
+.response-pagination[hidden] { display: none; }
+#response-error:focus { outline-offset: 4px; }
+@media (max-width: 600px) {
+  .response-filter-fields { grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .response-filter-fields .field:first-child { grid-column: 1 / -1; }
+  .response-filters { padding: 15px; }
+}

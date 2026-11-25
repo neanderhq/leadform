@@ -40,7 +40,7 @@ window.addEventListener('beforeunload', event => {
   event.returnValue = '';
 });
 function formatDate(value) { return new Intl.DateTimeFormat(undefined,{dateStyle:'medium'}).format(new Date(value)); }
-function formatDateTime(value) { return new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(new Date(value)); }
+function formatDateTime(value) { return new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short',timeZone:'UTC'}).format(new Date(value)); }
 function header(actions='') { return `<header class="topbar"><a class="wordmark" href="/" data-nav="/">Leadform</a><div class="top-actions">${actions}</div></header>`; }
 function showToast(message) { const node=document.createElement('div');node.className='toast';node.textContent=message;document.body.append(node);setTimeout(()=>node.remove(),2100); }
 
@@ -506,13 +506,144 @@ function mountRespondent(form,preview) {
   render();
 }
 
+function responseTable(questions, responses) {
+  const heading = questions.map(q => `<th>${esc(q.title)}</th>`).join('');
+  const rows = responses.map(response => {
+    const cells = questions.map(q => `<td data-label="${esc(q.title)}">${esc(response.answers[q.id] ?? '')}</td>`).join('');
+    return `<tr><td data-label="Submitted">${esc(formatDateTime(response.submittedAt))} UTC</td>${cells}</tr>`;
+  }).join('');
+  return `<div class="responses-table-wrap"><table class="responses-table">
+    <thead><tr><th>Submitted</th>${heading}</tr></thead><tbody>${rows}</tbody>
+  </table></div>`;
+}
+
 async function responsesView(id) {
+  const endpoint = `/api/forms/${encodeURIComponent(id)}/responses/query`;
+  const query = values => api(endpoint, {method:'POST',body:json(values)});
+  const emptyFilters = {search:'',from:'',to:''};
   try {
-    const [form,data]=await Promise.all([api(`/api/forms/${id}`),api(`/api/forms/${id}/responses`)]);
-    const questions=data.questions;const responses=data.responses;
-    app.innerHTML=DOMPurify.sanitize(`<main class="shell">${header(`<button class="button" data-nav="/edit/${form.id}">Edit form</button><button class="button" data-nav="/">Dashboard</button>`)}<section class="responses-head"><div><p class="eyebrow">Responses</p><h1 class="page-title">${esc(form.title)}</h1><p class="intro muted">${responses.length} completed ${responses.length===1?'response':'responses'}</p></div>${responses.length ? '<button class="button primary" id="export">Export CSV</button>' : ''}</section>${responses.length?`<div class="responses-table-wrap"><table class="responses-table"><thead><tr><th>Submitted</th>${questions.map(q=>`<th>${esc(q.title)}</th>`).join('')}</tr></thead><tbody>${responses.map(response=>`<tr><td data-label="Submitted">${esc(formatDateTime(response.submittedAt))}</td>${questions.map(q=>`<td data-label="${esc(q.title)}">${esc(response.answers[q.id]??'')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`:`<section class="empty"><h2>No responses yet</h2><p>Completed submissions will appear here.</p></section>`}</main>`);
-    document.querySelector('#export')?.addEventListener('click', () => downloadCsv(form, questions, responses));
-  }catch(error){if(error.status===401)return loginView(false);app.innerHTML=DOMPurify.sanitize(`<main class="shell"><p class="error">${esc(error.message)}</p></main>`)}
+    const [form, initial] = await Promise.all([api(`/api/forms/${encodeURIComponent(id)}`), query({})]);
+    if (location.pathname !== `/responses/${encodeURIComponent(id)}`) return;
+    app.innerHTML = DOMPurify.sanitize(`<main class="shell">
+      ${header(`<button class="button" data-nav="/edit/${esc(form.id)}">Edit form</button><button class="button" data-nav="/">Dashboard</button>`)}
+      <section class="responses-head"><div><p class="eyebrow">Responses</p><h1 class="page-title">${esc(form.title)}</h1></div></section>
+      <form id="response-filters" class="panel response-filters">
+        <div class="response-filter-fields">
+          <div class="field"><label for="response-search">Search answers</label><input id="response-search" name="search" type="search" maxlength="200" placeholder="Name, email or answer"></div>
+          <div class="field"><label for="response-from">From date (UTC)</label><input id="response-from" name="from" type="date"></div>
+          <div class="field"><label for="response-to">To date (UTC)</label><input id="response-to" name="to" type="date"></div>
+        </div>
+        <div class="response-actions">
+          <button class="button" type="submit">Apply filters</button><button class="button ghost" id="clear-response-filters" type="button">Clear filters</button>
+        </div>
+      </form>
+      <p id="response-error" class="error" role="alert" tabindex="-1" hidden></p>
+      <div class="response-results-bar">
+        <p id="response-count" class="muted" role="status"></p>
+        <button class="button primary" id="export" type="button">Export CSV</button>
+      </div>
+      <div id="response-results"></div>
+      <nav class="response-pagination" aria-label="Response pages" hidden>
+        <button class="button" id="previous-response-page" type="button">Previous page</button>
+        <span id="response-page-number" class="muted"></span>
+        <button class="button" id="next-response-page" type="button">Next page</button>
+      </nav>
+    </main>`);
+    const filters = document.querySelector('#response-filters');
+    const error = document.querySelector('#response-error');
+    const count = document.querySelector('#response-count');
+    const results = document.querySelector('#response-results');
+    const pager = document.querySelector('.response-pagination');
+    const previous = document.querySelector('#previous-response-page');
+    const next = document.querySelector('#next-response-page');
+    const pageNumber = document.querySelector('#response-page-number');
+    const exportButton = document.querySelector('#export');
+    let active = emptyFilters;
+    let data = initial;
+    let page = 1;
+    let pending = false;
+
+    const showError = message => {
+      error.textContent = message;
+      error.hidden = !message;
+      if (message) error.focus();
+    };
+    const render = () => {
+      const filtered = Boolean(active.search || active.from || active.to);
+      const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
+      count.textContent = `${data.total} ${filtered ? 'matching' : 'completed'} ${data.total === 1 ? 'response' : 'responses'}`;
+      exportButton.disabled = pending || data.total === 0;
+      previous.disabled = pending || page === 1;
+      next.disabled = pending || page >= pages;
+      pager.hidden = pages === 1;
+      pageNumber.textContent = `Page ${page} of ${pages}`;
+      results.innerHTML = DOMPurify.sanitize(data.responses.length
+        ? responseTable(data.questions, data.responses)
+        : filtered
+          ? '<section class="empty"><h2>No matching responses</h2><p>Change your search or clear the filters to see other responses.</p></section>'
+          : '<section class="empty"><h2>No responses yet</h2><p>Completed submissions will appear here.</p></section>');
+    };
+    const load = async (values, requestedPage = 1, moveFocus = false) => {
+      if (pending) return;
+      pending = true;
+      showError('');
+      exportButton.disabled = true;
+      try {
+        const updated = await query({...values,page:requestedPage});
+        if (!results.isConnected) return;
+        data = updated;
+        active = values;
+        page = requestedPage;
+      } catch (loadError) {
+        if (results.isConnected) showError(loadError.message);
+      } finally {
+        pending = false;
+        if (results.isConnected) {
+          render();
+          if (moveFocus && error.hidden) {
+            const target = requestedPage > 1 && !previous.disabled ? previous : next;
+            target.focus();
+          }
+        }
+      }
+    };
+    filters.addEventListener('submit', event => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(filters));
+      load({...values,search:values.search.trim()});
+    });
+    document.querySelector('#clear-response-filters').onclick = () => {
+      if (pending) return;
+      filters.reset();
+      load(emptyFilters);
+    };
+    previous.onclick = () => load(active, page - 1, true);
+    next.onclick = () => load(active, page + 1, true);
+    exportButton.onclick = async () => {
+      if (pending || data.total === 0) return;
+      pending = true;
+      exportButton.disabled = true;
+      showError('');
+      try {
+        const exported = await query({...active,exportAll:true});
+        if (!results.isConnected) return;
+        if (exported.total === 0) return showError('No matching responses are available to export.');
+        downloadCsv(form, exported.questions, exported.responses);
+      } catch (exportError) {
+        if (results.isConnected) showError(exportError.message);
+      } finally {
+        pending = false;
+        if (results.isConnected) {
+          render();
+          if (error.hidden) exportButton.focus();
+        }
+      }
+    };
+    render();
+  } catch (error) {
+    if (error.status === 401) return loginView();
+    app.innerHTML = DOMPurify.sanitize(`<main class="shell"><p class="error">${esc(error.message)}</p></main>`);
+  }
 }
 function downloadCsv(form,questions,responses) {
   const safeCell=value=>{

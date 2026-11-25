@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, expect } from '@playwright/test';
 import { Client } from 'pg';
 import { seed } from '../.neander/seed.mjs';
+import { verifyResponseFilters } from './verify-features.mjs';
 
 const exec = promisify(execFile);
 const image = process.env.NEANDER_TEMPLATE_IMAGE;
@@ -228,6 +229,8 @@ try {
   const download = await downloadPromise;
   const csv = await readFile(await download.path(), 'utf8');
   assert.ok(csv.includes('casey.template@example.invalid') && csv.includes('Alex Rivera'));
+
+  await verifyResponseFilters({ db, ownerRequest, anonymous, origin: origin.origin, page });
 
   const deletedForm = (await db.query('SELECT * FROM forms WHERE id=$1', ['sample-event-registration'])).rows[0];
   const deletedResponses = (await db.query('SELECT * FROM responses WHERE form_id=$1', [deletedForm.id])).rows;
