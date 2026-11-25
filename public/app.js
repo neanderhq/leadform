@@ -61,7 +61,7 @@ async function loginView() {
 async function dashboardView() {
   try {
     const forms=await api('/api/forms');
-    app.innerHTML=DOMPurify.sanitize(`<main class="shell">${header('<button class="button ghost" id="logout">Sign out</button>')}<section class="dashboard-head"><div><p class="eyebrow">Workspace</p><h1 class="page-title">Your forms</h1><p class="intro muted">Create a form and gather the responses that matter.</p></div><button class="button primary" id="create">＋ Create form</button></section>${forms.length?`<section class="form-list">${forms.map(form=>`<article class="form-card"><div><h2 class="form-title">${esc(form.title)}</h2><div class="form-meta">${form.response_count} ${form.response_count===1?'response':'responses'} · Created ${formatDate(form.created_at)}</div></div><div class="row-actions"><button class="button small" data-response="${form.id}">View responses</button><button class="button small" data-edit="${form.id}">Edit</button><button class="button small danger" data-delete="${form.id}">Delete</button></div></article>`).join('')}</section>`:`<section class="empty"><h2>No forms yet</h2><p>Create your first form to start collecting responses.</p><button class="button primary" id="create-empty">Create your first form</button></section>`}</main>`);
+    app.innerHTML=DOMPurify.sanitize(`<main class="shell">${header('<button class="button ghost" id="logout">Sign out</button>')}<section class="dashboard-head"><div><p class="eyebrow">Workspace</p><h1 class="page-title">Your forms</h1><p class="intro muted">Create a form and gather the responses that matter.</p></div><button class="button primary" id="create">＋ Create form</button></section>${forms.length?`<section class="form-list">${forms.map(form=>`<article class="form-card"><div><h2 class="form-title">${esc(form.title)}</h2><div class="form-meta">${form.response_count} ${form.response_count===1?'response':'responses'} · ${publicationLabel(form)} · Created ${formatDate(form.created_at)}</div></div><div class="row-actions"><button class="button small" data-response="${form.id}">View responses</button><button class="button small" data-edit="${form.id}">Edit</button><button class="button small danger" data-delete="${form.id}">Delete</button></div></article>`).join('')}</section>`:`<section class="empty"><h2>No forms yet</h2><p>Create your first form to start collecting responses.</p><button class="button primary" id="create-empty">Create your first form</button></section>`}</main>`);
     document.querySelector('#logout').onclick=async()=>{await api('/api/logout',{method:'POST'});go('/')};
     const create=async()=>{try{const form=await api('/api/forms',{method:'POST',body:'{}'});go(`/edit/${form.id}`)}catch(error){showToast(error.message)}};
     document.querySelector('#create').onclick=create;document.querySelector('#create-empty')?.addEventListener('click',create);
@@ -100,15 +100,33 @@ function editorSnapshot() {
   const design={primary:document.querySelector('#primary-color')?.value||currentForm.design?.primary||defaults.primary,background:document.querySelector('#background-color')?.value||currentForm.design?.background||defaults.background,text:document.querySelector('#text-color')?.value||currentForm.design?.text||defaults.text,logo:document.querySelector('#logo-url')?.value??currentForm.design?.logo??''};
   return {...currentForm,title,description,questions,design};
 }
+function publicationLabel(form) {
+  if (form.published_version === null) return 'Draft only';
+  return form.published_version === form.draft_version ? 'Published' : 'Published · Draft changes';
+}
 function renderEditor() {
   const form=currentForm;form.design={...defaults,...form.design};form.questions ||= [];
   editorDirty=false;
-  app.innerHTML=DOMPurify.sanitize(`<main class="shell editor-shell"><header class="editor-head"><div><button class="button ghost" data-nav="/">← Dashboard</button><h1 class="editor-title">Edit form</h1></div><div class="top-actions"><button class="button" id="preview">Preview</button><button class="button" id="copy-link">Copy link</button><div class="save-control"><button class="button primary" id="save">Save</button><div id="save-state" class="save-state" role="status"></div></div></div></header><p class="editor-sharing-note">Preview includes unsaved edits. The public link shows the saved form.</p><div class="editor-layout"><section><div class="panel"><div class="field"><label for="form-title">Form title</label><input id="form-title" class="control" value="${esc(form.title)}" maxlength="200"></div><div class="field"><label for="form-description">Description</label><textarea id="form-description" class="control">${esc(form.description)}</textarea></div></div><div class="panel" style="margin-top:16px"><p class="section-label">Questions</p><div id="questions">${form.questions.map((q,i)=>questionTemplate(q,i,form.questions)).join('')}</div><button class="button" id="add-question">＋ Add question</button></div></section><aside class="panel side-panel"><p class="section-label">Design</p><div class="color-row"><label for="primary-color">Primary color</label><input type="color" id="primary-color" value="${esc(form.design.primary)}"></div><div class="color-row"><label for="background-color">Background</label><input type="color" id="background-color" value="${esc(form.design.background)}"></div><div class="color-row"><label for="text-color">Text color</label><input type="color" id="text-color" value="${esc(form.design.text)}"></div><div class="field" style="margin-top:18px"><label for="logo-url">Logo image URL</label><input id="logo-url" class="control" type="url" placeholder="https://…" value="${esc(form.design.logo)}"><div class="logo-preview-wrap"><img id="logo-preview" alt="Logo preview"><span id="logo-preview-empty">Logo preview appears here</span></div></div><p class="hint">Changes appear in preview and on your public form after you save.</p></aside></div></main>`);
+  app.innerHTML=DOMPurify.sanitize(`<main class="shell editor-shell"><header class="editor-head"><div><button class="button ghost" data-nav="/">← Dashboard</button><h1 class="editor-title">Edit form</h1></div><div class="top-actions"><button class="button" id="preview">Preview</button><button class="button" id="copy-link">Copy link</button><button class="button" id="save">Save draft</button><button class="button primary" id="publish">Publish</button></div></header><div class="editor-publication"><strong id="publication-state">${publicationLabel(form)}</strong><span id="save-state" class="save-state" role="status"></span></div><p class="editor-sharing-note">Save draft to keep your edits private. Publish updates the form at its public link.</p><div class="editor-layout"><section><div class="panel"><div class="field"><label for="form-title">Form title</label><input id="form-title" class="control" value="${esc(form.title)}" maxlength="200"></div><div class="field"><label for="form-description">Description</label><textarea id="form-description" class="control">${esc(form.description)}</textarea></div></div><div class="panel" style="margin-top:16px"><p class="section-label">Questions</p><div id="questions">${form.questions.map((q,i)=>questionTemplate(q,i,form.questions)).join('')}</div><button class="button" id="add-question">＋ Add question</button></div></section><aside class="panel side-panel"><p class="section-label">Design</p><div class="color-row"><label for="primary-color">Primary color</label><input type="color" id="primary-color" value="${esc(form.design.primary)}"></div><div class="color-row"><label for="background-color">Background</label><input type="color" id="background-color" value="${esc(form.design.background)}"></div><div class="color-row"><label for="text-color">Text color</label><input type="color" id="text-color" value="${esc(form.design.text)}"></div><div class="field" style="margin-top:18px"><label for="logo-url">Logo image URL</label><input id="logo-url" class="control" type="url" placeholder="https://…" value="${esc(form.design.logo)}"><div class="logo-preview-wrap"><img id="logo-preview" alt="Logo preview"><span id="logo-preview-empty">Logo preview appears here</span></div></div><p class="hint">Preview includes unsaved edits. Respondents see the published version.</p></aside></div></main>`);
   const getSnapshot=()=>editorSnapshot();
   const saveState = document.querySelector('#save-state');
   const saveButton = document.querySelector('#save');
+  const publishButton = document.querySelector('#publish');
+  const copyButton = document.querySelector('#copy-link');
+  const publicationState = document.querySelector('#publication-state');
+  let savedForm = form;
   let editVersion = 0;
   let saving = false;
+  let publishing = false;
+  const updatePublication = () => {
+    const hasPublicForm = savedForm.published_version !== null;
+    copyButton.disabled = !hasPublicForm;
+    const canPublish = !editorDirty && !saving && !publishing && savedForm.questions.length > 0
+      && savedForm.draft_version !== savedForm.published_version;
+    publishButton.setAttribute('aria-disabled', String(!canPublish));
+    publishButton.textContent = publishing ? 'Publishing…' : hasPublicForm ? 'Publish changes' : 'Publish';
+    publicationState.textContent = publicationLabel(savedForm);
+  };
   const setSaveState = (message, state = '') => {
     saveState.textContent = message;
     saveState.className = ['save-state', state].filter(Boolean).join(' ');
@@ -117,6 +135,7 @@ function renderEditor() {
     editVersion++;
     editorDirty = true;
     setSaveState(saving ? 'Saving earlier edits…' : 'Unsaved changes');
+    updatePublication();
     document.querySelectorAll('[data-question-error]').forEach(error => error.textContent = '');
   };
   const updateLogoPreview=()=>{
@@ -183,17 +202,19 @@ function renderEditor() {
     renderQuestions(question.id, ['[data-qtitle]']);
   };
   saveButton.onclick = async () => {
-    if (saving) return;
+    if (saving || publishing) return;
     const version = editVersion;
     const body = json(getSnapshot());
     saving = true;
     // Keep focus on Save while the request is pending. The guard also covers keyboard activation.
     saveButton.setAttribute('aria-disabled', 'true');
     setSaveState('Saving…');
+    updatePublication();
     document.querySelectorAll('[data-question-error]').forEach(error => error.textContent = '');
     try {
       const saved = await api(`/api/forms/${form.id}`, {method: 'PUT', body});
       if (!saveState.isConnected) return;
+      savedForm = saved;
       if (editVersion === version) {
         currentForm = saved;
         editorDirty = false;
@@ -216,13 +237,36 @@ function renderEditor() {
     } finally {
       saving = false;
       saveButton.removeAttribute('aria-disabled');
+      updatePublication();
     }
   };
+  publishButton.onclick = async () => {
+    if (publishButton.getAttribute('aria-disabled') === 'true') return;
+    publishing = true;
+    saveButton.setAttribute('aria-disabled', 'true');
+    setSaveState('Publishing…');
+    updatePublication();
+    try {
+      const published = await api(`/api/forms/${form.id}/publish`, {
+        method: 'POST', body: json({version: savedForm.draft_version})
+      });
+      if (!saveState.isConnected) return;
+      savedForm = published;
+      setSaveState(editorDirty ? 'Unsaved changes' : 'Published', editorDirty ? '' : 'ok');
+    } catch (error) {
+      if (saveState.isConnected) setSaveState(error.message, 'error');
+    } finally {
+      publishing = false;
+      saveButton.removeAttribute('aria-disabled');
+      updatePublication();
+    }
+  };
+  updatePublication();
   document.querySelectorAll('#form-title,#form-description,#primary-color,#background-color,#text-color').forEach(input=>input.addEventListener('input',markUnsaved));
   document.querySelector('#logo-url').addEventListener('input',()=>{markUnsaved();updateLogoPreview()});
   updateLogoPreview();
   document.querySelector('#preview').onclick=()=>{const draft=getSnapshot();sessionStorage.setItem('leadform-preview',json(draft));window.open(`/preview/${draft.id}`,'_blank')};
-  document.querySelector('#copy-link').onclick = async () => {
+  copyButton.onclick = async () => {
     const link = `${location.origin}/f/${form.id}`;
     try {
       await navigator.clipboard.writeText(link);
@@ -450,7 +494,7 @@ function mountRespondent(form,preview) {
     render();
     const submittingView = app.firstElementChild;
     try {
-      await api(`/api/public/forms/${encodeURIComponent(form.id)}/submit`, {method: 'POST', body: json({answers})});
+      await api(`/api/public/forms/${encodeURIComponent(form.id)}/submit`, {method: 'POST', body: json({answers, version: form.version})});
       done = true;
     } catch (error) {
       errorMessage = error.message;

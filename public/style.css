@@ -21,3 +21,6 @@
 @media(prefers-reduced-motion:reduce){
   .public-progress{transition:none}
 }
+
+.editor-publication{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;font-size:13px;margin:0 0 7px}.editor-publication .save-state{margin:0}
+#publish[aria-disabled="true"],#copy-link:disabled{opacity:.55;cursor:default}

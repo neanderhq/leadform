@@ -37,7 +37,11 @@ export async function seed(databaseUrl = process.env.DATABASE_URL) {
     }
     for (const [formIndex, form] of examples.entries()) {
       const created = new Date(Date.now() - (3 - formIndex) * 86400000).toISOString();
-      await client.query('INSERT INTO forms (id,title,description,questions,design,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$6)', [form.id, form.title, form.description, JSON.stringify(form.questions), JSON.stringify(design), created]);
+      const snapshot = { version: 1, title: form.title, description: form.description, questions: form.questions, design };
+      await client.query(
+        'INSERT INTO forms (id,title,description,questions,design,created_at,updated_at,published_snapshot) VALUES ($1,$2,$3,$4,$5,$6,$6,$7)',
+        [form.id, form.title, form.description, JSON.stringify(form.questions), JSON.stringify(design), created, JSON.stringify(snapshot)]
+      );
       for (const [index, answers] of form.responses.entries()) {
         await client.query('INSERT INTO responses (id,form_id,answers,submitted_at) VALUES ($1,$2,$3,$4)', [`${form.id}-response-${index}`, form.id, JSON.stringify(answers), new Date(Date.now() - (index + 1) * 3600000).toISOString()]);
       }

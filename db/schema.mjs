@@ -8,7 +8,9 @@ export async function initializeSchema(pool) {
   try {
     await client.query('BEGIN');
     await client.query("SELECT pg_advisory_xact_lock(hashtext('leadform-schema-v1'))");
-    await client.query(await readFile(new URL('./schema/001-initial.sql', import.meta.url), 'utf8'));
+    for (const name of ['001-initial.sql', '002-form-publication.sql']) {
+      await client.query(await readFile(new URL(`./schema/${name}`, import.meta.url), 'utf8'));
+    }
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
